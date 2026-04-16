@@ -63,12 +63,23 @@ adminRouter.post('/plans', async (req: AuthRequest, res: Response, next: NextFun
 adminRouter.put('/plans/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const data = { ...req.body };
-    if (data.price) data.price = parseFloat(data.price);
-    if (data.maxUsers) data.maxUsers = parseInt(data.maxUsers);
-    if (data.maxProjects) data.maxProjects = parseInt(data.maxProjects);
-    if (data.maxStorage) data.maxStorage = parseInt(data.maxStorage);
+    if (data.price !== undefined) data.price = parseFloat(data.price);
+    if (data.maxUsers !== undefined) data.maxUsers = parseInt(data.maxUsers);
+    if (data.maxProjects !== undefined) data.maxProjects = parseInt(data.maxProjects);
+    if (data.maxStorage !== undefined) data.maxStorage = parseInt(data.maxStorage);
     if (data.features && typeof data.features !== 'string') data.features = JSON.stringify(data.features);
     const plan = await prisma.subscriptionPlan.update({ where: { id: req.params.id }, data });
+    res.json({ success: true, data: plan });
+  } catch (err) { next(err); }
+});
+
+adminRouter.delete('/plans/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    // Soft-delete: set active = false
+    const plan = await prisma.subscriptionPlan.update({
+      where: { id: req.params.id },
+      data: { active: false },
+    });
     res.json({ success: true, data: plan });
   } catch (err) { next(err); }
 });
