@@ -21,20 +21,39 @@ adminRouter.get('/stats', async (_req: AuthRequest, res: Response, next: NextFun
 adminRouter.get('/audit-logs', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const page = parseInt(String(req.query.page)) || 1;
-    const limit = parseInt(String(req.query.limit)) || 50;
+    const limit = parseInt(String(req.query.limit)) || 100;
     const skip = (page - 1) * limit;
 
     const [logs, total] = await Promise.all([
       prisma.auditLog.findMany({
         skip,
         take: limit,
-        include: { user: { select: { id: true, name: true, email: true } } },
+        include: {
+          user: {
+            select: {
+              id: true, name: true, email: true,
+              company: { select: { id: true, name: true } },
+            },
+          },
+        },
         orderBy: { createdAt: 'desc' },
       }),
       prisma.auditLog.count(),
     ]);
 
     res.json({ success: true, data: logs, meta: { total, page, limit, pages: Math.ceil(total / limit) } });
+  } catch (err) { next(err); }
+});
+
+/* Companies inactive for 30+ days (active but no recent activity) */
+adminRouter.get('/alerts', async (_req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const inactive = await prisma.company.findMany({
+      where: { active: true, updatedAt: { lt: thirtyDaysAgo } },
+      orderBy: { updatedAt: 'asc' },
+    });
+    res.json({ success: true, data: inactive });
   } catch (err) { next(err); }
 });
 
