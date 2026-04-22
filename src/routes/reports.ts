@@ -5,6 +5,133 @@ import { createError } from '../middleware/errorHandler';
 import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 
+// ─── DXF R12 generator ───────────────────────────────────────────────────────
+
+type DXFRoom = { name: string; area: number; perimeter: number; notes: string | null };
+
+function buildProjectDXF(project: { name: string; clientName: string | null; rooms: DXFRoom[] }): string {
+  const lines: string[] = [];
+
+  const emit = (code: number, value: string | number) => {
+    lines.push(String(code), String(value));
+  };
+
+  const emitLine = (layer: string, x1: number, y1: number, x2: number, y2: number) => {
+    emit(0, 'LINE');
+    emit(8, layer);
+    emit(10, x1.toFixed(6)); emit(20, y1.toFixed(6)); emit(30, '0.000000');
+    emit(11, x2.toFixed(6)); emit(21, y2.toFixed(6)); emit(31, '0.000000');
+  };
+
+  const emitText = (layer: string, x: number, y: number, height: number, text: string) => {
+    emit(0, 'TEXT');
+    emit(8, layer);
+    emit(10, x.toFixed(6)); emit(20, y.toFixed(6)); emit(30, '0.000000');
+    emit(40, height.toFixed(6));
+    emit(1, text);
+  };
+
+  // HEADER
+  emit(0, 'SECTION'); emit(2, 'HEADER');
+  emit(9, '$ACADVER'); emit(1, 'AC1009');
+  emit(9, '$INSUNITS'); emit(70, 6);   // Meters
+  emit(9, '$MEASUREMENT'); emit(70, 1); // Metric
+  emit(0, 'ENDSEC');
+
+  // TABLES — layer definitions
+  emit(0, 'SECTION'); emit(2, 'TABLES');
+  emit(0, 'TABLE'); emit(2, 'LAYER'); emit(70, 3);
+  for (const [name, color] of [['0', 7], ['ROOMS', 5], ['LABELS', 3]] as [string, number][]) {
+    emit(0, 'LAYER'); emit(2, name); emit(70, 0); emit(62, color); emit(6, 'CONTINUOUS');
+  }
+  emit(0, 'ENDTAB');
+  emit(0, 'ENDSEC');
+
+  // ENTITIES
+  emit(0, 'SECTION'); emit(2, 'ENTITIES');
+
+  // Title block
+  emitText('0', 0, 3.0, 0.5, 'MARMODECOR');
+  emitText('0', 0, 2.3, 0.28, `Projeto: ${project.name}`);
+  if (project.clientName) emitText('0', 0, 1.9, 0.22, `Cliente: ${project.clientName}`);
+  emitText('0', 0, 1.5, 0.18, `Exportado em: ${new Date().toLocaleDateString('pt-BR')}`);
+  emitLine('0', 0, 1.1, 30, 1.1); // separator
+
+  // Room layout
+  const { rooms } = project;
+  if (rooms.length > 0) {
+    const COLS = Math.max(1, Math.ceil(Math.sqrt(rooms.length)));
+    const GAP = 1.0;
+    const TITLE_BOTTOM = 0.8; // Y start (below separator)
+
+    // Derive rectangle dimensions from area + perimeter
+    const dims = rooms.map(r => {
+      const area = Math.max(r.area, 0.01);
+      const half = r.perimeter / 2;
+      let w: number, h: number;
+      if (r.perimeter > 0) {
+        const disc = half * half - 4 * area;
+        if (disc >= 0) {
+          w = (half + Math.sqrt(disc)) / 2;
+          h = area / w;
+        } else {
+          w = h = Math.sqrt(area);
+        }
+      } else {
+        w = h = Math.sqrt(area);
+      }
+      return { w: Math.max(w, 0.5), h: Math.max(h, 0.5) };
+    });
+
+    // Column widths and row heights
+    const numRows = Math.ceil(rooms.length / COLS);
+    const colWidths = Array.from({ length: COLS }, (_, c) =>
+      Math.max(...Array.from({ length: numRows }, (_, r) => {
+        const idx = r * COLS + c;
+        return idx < rooms.length ? dims[idx].w : 0;
+      }))
+    );
+    const rowHeights = Array.from({ length: numRows }, (_, r) =>
+      Math.max(...Array.from({ length: COLS }, (_, c) => {
+        const idx = r * COLS + c;
+        return idx < rooms.length ? dims[idx].h : 0;
+      }))
+    );
+
+    // Cumulative column/row offsets
+    const colX = colWidths.reduce<number[]>((acc, w, i) => [...acc, (acc[i] ?? 0) + (i > 0 ? colWidths[i - 1] + GAP : 0)], [0]).slice(0, COLS);
+    const rowY = rowHeights.reduce<number[]>((acc, h, i) => [...acc, (acc[i] ?? 0) + (i > 0 ? rowHeights[i - 1] + GAP + 0.7 : 0)], [0]).slice(0, numRows);
+
+    rooms.forEach((room, i) => {
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+      const { w, h } = dims[i];
+      const x1 = colX[col];
+      const y1 = -(TITLE_BOTTOM + rowY[row]);
+      const x2 = x1 + w;
+      const y2 = y1 - h;
+
+      // Rectangle
+      emitLine('ROOMS', x1, y1, x2, y1);
+      emitLine('ROOMS', x2, y1, x2, y2);
+      emitLine('ROOMS', x2, y2, x1, y2);
+      emitLine('ROOMS', x1, y2, x1, y1);
+
+      // Labels inside rectangle
+      const lx = x1 + 0.1;
+      emitText('LABELS', lx, y1 - 0.28, 0.2, room.name);
+      emitText('LABELS', lx, y1 - 0.56, 0.14, `Área: ${room.area.toFixed(2)} m²`);
+      if (room.perimeter > 0) emitText('LABELS', lx, y1 - 0.76, 0.12, `Perímetro: ${room.perimeter.toFixed(2)} m`);
+      if (room.notes) emitText('LABELS', lx, y1 - 0.96, 0.11, room.notes);
+    });
+  }
+
+  emit(0, 'ENDSEC');
+  emit(0, 'EOF');
+
+  return lines.join('\n');
+}
+
 export const reportsRouter = Router();
 reportsRouter.use(authenticate);
 
@@ -225,5 +352,27 @@ reportsRouter.get('/budgets/:id/excel', async (req: AuthRequest, res: Response, 
     res.setHeader('Content-Disposition', `attachment; filename="orcamento-${budget.id}.xlsx"`);
     await workbook.xlsx.write(res);
     res.end();
+  } catch (err) { next(err); }
+});
+
+// Export project rooms as DXF
+reportsRouter.get('/projects/:id/dxf', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const where = req.user!.role === 'ADMIN'
+      ? { id: req.params.id }
+      : { id: req.params.id, userId: req.user!.id };
+
+    const project = await prisma.project.findFirst({
+      where,
+      include: { rooms: { orderBy: { createdAt: 'asc' } } },
+    });
+    if (!project) throw createError('Projeto não encontrado', 404);
+
+    const dxf = buildProjectDXF(project);
+    const filename = `projeto-${project.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.dxf`;
+
+    res.setHeader('Content-Type', 'application/dxf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(dxf);
   } catch (err) { next(err); }
 });

@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../utils/prisma';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { createError } from '../middleware/errorHandler';
+import { processDXFFile } from '../services/dxfProcessor';
 
 const uploadDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -129,7 +130,44 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
       },
     });
 
-    res.status(201).json({ success: true, data: file, message: 'Arquivo enviado com sucesso' });
+    // Auto-process DXF files
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    let roomsCreated = 0;
+
+    if (ext === '.dxf') {
+      try {
+        const extracted = processDXFFile(req.file.path);
+
+        if (extracted.length > 0) {
+          await prisma.room.createMany({
+            data: extracted.map(r => ({
+              projectId: req.params.id,
+              fileId: file.id,
+              name: r.name,
+              area: r.area,
+              perimeter: r.perimeter,
+              notes: `Camada: ${r.layer}`,
+              isManual: false,
+            })),
+          });
+          roomsCreated = extracted.length;
+        }
+
+        await prisma.projectFile.update({
+          where: { id: file.id },
+          data: { processed: true, processedAt: new Date() },
+        });
+      } catch (processingError) {
+        console.error('DXF processing error:', processingError);
+        // Don't fail the upload — just mark as unprocessed
+      }
+    }
+
+    const message = roomsCreated > 0
+      ? `Arquivo processado: ${roomsCreated} ambiente(s) identificado(s) automaticamente`
+      : 'Arquivo enviado com sucesso';
+
+    res.status(201).json({ success: true, data: { ...file, roomsCreated }, message });
   } catch (err) { next(err); }
 });
 
