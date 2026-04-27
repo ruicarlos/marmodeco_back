@@ -188,6 +188,147 @@ reportsRouter.get('/dashboard', async (req: AuthRequest, res: Response, next: Ne
   } catch (err) { next(err); }
 });
 
+// ─── Sales analytics ─────────────────────────────────────────────────────────
+
+reportsRouter.get('/sales/stats', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const user  = req.user!;
+    const where = user.role === 'ADMIN' ? {} : { userId: user.id };
+    const bWhere = user.role === 'ADMIN' ? {} : { userId: user.id };
+
+    const [totalSales, paidSales, pendingSales, budgetPipeline, monthlySales] = await Promise.all([
+      prisma.sale.aggregate({ where, _sum: { totalAmount: true }, _count: true }),
+      prisma.sale.aggregate({ where: { ...where, status: 'PAID' }, _sum: { totalAmount: true }, _count: true }),
+      prisma.sale.aggregate({ where: { ...where, status: 'PENDING' }, _sum: { totalAmount: true }, _count: true }),
+      prisma.budget.groupBy({ by: ['status'], where: bWhere, _count: true }),
+      // Last 6 months
+      prisma.$queryRaw<{ month: string; total: number; count: number }[]>`
+        SELECT
+          TO_CHAR(DATE_TRUNC('month', "createdAt"), 'YYYY-MM') AS month,
+          SUM("totalAmount")::float AS total,
+          COUNT(*)::int AS count
+        FROM "Sale"
+        WHERE "userId" = ${user.role === 'ADMIN' ? prisma.sale.fields.userId : user.id}
+           OR ${user.role === 'ADMIN'} = true
+        GROUP BY DATE_TRUNC('month', "createdAt")
+        ORDER BY month DESC
+        LIMIT 6
+      `,
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        totalSalesAmount:   totalSales._sum.totalAmount   || 0,
+        totalSalesCount:    totalSales._count             || 0,
+        paidAmount:         paidSales._sum.totalAmount    || 0,
+        paidCount:          paidSales._count              || 0,
+        pendingAmount:      pendingSales._sum.totalAmount || 0,
+        pendingCount:       pendingSales._count           || 0,
+        budgetPipeline:     budgetPipeline,
+        monthlySales:       monthlySales.reverse(),
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+reportsRouter.get('/sales/by-client', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const user  = req.user!;
+    const where = user.role === 'ADMIN' ? {} : { userId: user.id };
+
+    const sales = await prisma.sale.findMany({
+      where,
+      include: {
+        budget: {
+          include: {
+            project: { select: { clientName: true, clientEmail: true } },
+          },
+        },
+      },
+    });
+
+    // Group by client
+    const grouped: Record<string, { clientName: string; count: number; total: number; paid: number; pending: number }> = {};
+    for (const sale of sales) {
+      const client = sale.budget?.project?.clientName || 'Cliente não informado';
+      if (!grouped[client]) {
+        grouped[client] = { clientName: client, count: 0, total: 0, paid: 0, pending: 0 };
+      }
+      grouped[client].count++;
+      grouped[client].total += sale.totalAmount;
+      if (sale.status === 'PAID')    grouped[client].paid    += sale.totalAmount;
+      else                           grouped[client].pending += sale.totalAmount;
+    }
+
+    const result = Object.values(grouped).sort((a, b) => b.total - a.total);
+    res.json({ success: true, data: result });
+  } catch (err) { next(err); }
+});
+
+reportsRouter.get('/sales/pipeline', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const user  = req.user!;
+    const bWhere = user.role === 'ADMIN' ? {} : { userId: user.id };
+
+    const stages = await prisma.budget.groupBy({
+      by:    ['status'],
+      where:  bWhere,
+      _count: true,
+      _sum:   { totalCost: true },
+    });
+
+    const ordered = ['DRAFT', 'PENDING', 'APPROVED', 'REJECTED'];
+    const result = ordered.map(s => {
+      const found = stages.find(st => st.status === s);
+      return { status: s, count: found?._count || 0, total: found?._sum?.totalCost || 0 };
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err) { next(err); }
+});
+
+reportsRouter.get('/sales/abc', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const user  = req.user!;
+    const bWhere = user.role === 'ADMIN' ? {} : { userId: user.id };
+
+    // Aggregate revenue by material from APPROVED budgets
+    const items = await prisma.budgetItem.findMany({
+      where: { budget: { ...bWhere, status: 'APPROVED' } },
+      include: { material: { select: { name: true, type: true } } },
+    });
+
+    const materialRevenue: Record<string, { name: string; type: string; revenue: number; area: number; count: number }> = {};
+    for (const item of items) {
+      const k = item.materialId;
+      if (!materialRevenue[k]) {
+        materialRevenue[k] = { name: item.material.name, type: item.material.type, revenue: 0, area: 0, count: 0 };
+      }
+      materialRevenue[k].revenue += item.subtotal;
+      materialRevenue[k].area    += item.area;
+      materialRevenue[k].count++;
+    }
+
+    const sorted = Object.values(materialRevenue).sort((a, b) => b.revenue - a.revenue);
+    const totalRevenue = sorted.reduce((s, m) => s + m.revenue, 0);
+
+    let cumulative = 0;
+    const result = sorted.map(m => {
+      cumulative += m.revenue;
+      const cumPct = totalRevenue > 0 ? (cumulative / totalRevenue) * 100 : 0;
+      return {
+        ...m,
+        revenuePct: totalRevenue > 0 ? (m.revenue / totalRevenue) * 100 : 0,
+        cumPct,
+        curve: cumPct <= 80 ? 'A' : cumPct <= 95 ? 'B' : 'C',
+      };
+    });
+
+    res.json({ success: true, data: result, totalRevenue });
+  } catch (err) { next(err); }
+});
+
 // ─── PDF helpers ─────────────────────────────────────────────────────────────
 const NAVY  = '#1a2e5a';
 const GOLD  = '#b8935a';

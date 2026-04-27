@@ -140,6 +140,53 @@ model Budget {
 
   items       BudgetItem[]
   adjustments BudgetAdjustment[]
+  sale        Sale?
+}
+
+model Sale {
+  id            String   @id @default(uuid())
+  budgetId      String   @unique
+  budget        Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  userId        String
+  companyId     String?
+  clientName    String?
+  totalAmount   Float
+  paymentMethod String   @default("PIX") // CARD | PIX | CASH | MIXED
+  status        String   @default("PENDING") // PENDING | PAID | PARTIAL | CANCELLED
+  notes         String?
+  paidAt        DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  payments         SalePayment[]
+  financialEntries FinancialEntry[]
+}
+
+model SalePayment {
+  id        String    @id @default(uuid())
+  saleId    String
+  sale      Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  method    String    // CARD | PIX | CASH
+  amount    Float
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model FinancialEntry {
+  id          String    @id @default(uuid())
+  userId      String
+  companyId   String?
+  type        String    // RECEIVABLE | PAYABLE
+  description String
+  amount      Float
+  dueDate     DateTime?
+  paidAt      DateTime?
+  status      String    @default("PENDING") // PENDING | PAID | OVERDUE | CANCELLED
+  category    String?
+  saleId      String?
+  sale        Sale?     @relation(fields: [saleId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model BudgetAdjustment {

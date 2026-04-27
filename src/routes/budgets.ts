@@ -36,6 +36,7 @@ budgetsRouter.get('/:id', async (req: AuthRequest, res: Response, next: NextFunc
         seller:  { select: { id: true, name: true, email: true, phone: true, commission: true } },
         items:       { include: { room: true, material: true } },
         adjustments: { orderBy: { createdAt: 'asc' } },
+        sale:        { select: { id: true, status: true, paymentMethod: true, totalAmount: true, createdAt: true } },
       },
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
