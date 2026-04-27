@@ -25,11 +25,17 @@ materialsRouter.get('/all', async (_req, res: Response, next: NextFunction) => {
 
 materialsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { name, type, color, finish, thickness, pricePerM2, description, supplier } = req.body;
+    const { name, type, color, finish, thickness, pricePerM2, stock, description, supplier } = req.body;
     if (!name || !type) throw createError('Nome e tipo do material são obrigatórios');
 
     const material = await prisma.material.create({
-      data: { name, type, color, finish, thickness: thickness ? parseFloat(thickness) : null, pricePerM2: parseFloat(pricePerM2) || 0, description, supplier },
+      data: {
+        name, type, color, finish,
+        thickness:  thickness  ? parseFloat(thickness)  : null,
+        pricePerM2: parseFloat(pricePerM2) || 0,
+        stock:      parseFloat(stock)      || 0,
+        description, supplier,
+      },
     });
     res.status(201).json({ success: true, data: material });
   } catch (err) { next(err); }
@@ -38,8 +44,9 @@ materialsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunc
 materialsRouter.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const data = { ...req.body };
-    if (data.pricePerM2) data.pricePerM2 = parseFloat(data.pricePerM2);
-    if (data.thickness) data.thickness = parseFloat(data.thickness);
+    if (data.pricePerM2 !== undefined) data.pricePerM2 = parseFloat(data.pricePerM2) || 0;
+    if (data.thickness  !== undefined) data.thickness  = data.thickness ? parseFloat(data.thickness) : null;
+    if (data.stock      !== undefined) data.stock      = parseFloat(data.stock) || 0;
     const material = await prisma.material.update({ where: { id: req.params.id }, data });
     res.json({ success: true, data: material });
   } catch (err) { next(err); }

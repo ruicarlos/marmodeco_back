@@ -10,9 +10,16 @@ salesRouter.use(authenticate);
 salesRouter.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const user = req.user!;
-    const where = user.role === 'ADMIN'
-      ? {}
-      : { userId: user.id };
+    const { startDate, endDate } = req.query as Record<string, string>;
+    const dr: { gte?: Date; lte?: Date } | undefined = (startDate || endDate) ? {} : undefined;
+    if (dr) {
+      if (startDate) dr.gte = new Date(startDate + 'T00:00:00.000Z');
+      if (endDate)   dr.lte = new Date(endDate   + 'T23:59:59.999Z');
+    }
+    const where = {
+      ...(user.role !== 'ADMIN' && { userId: user.id }),
+      ...(dr && { createdAt: dr }),
+    };
 
     const sales = await prisma.sale.findMany({
       where,

@@ -10,12 +10,18 @@ financialRouter.use(authenticate);
 financialRouter.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const user  = req.user!;
-    const type  = req.query.type as string | undefined;   // RECEIVABLE | PAYABLE
-    const status = req.query.status as string | undefined;
+    const { type, status, startDate, endDate } = req.query as Record<string, string>;
+
+    const dr: { gte?: Date; lte?: Date } | undefined = (startDate || endDate) ? {} : undefined;
+    if (dr) {
+      if (startDate) dr.gte = new Date(startDate + 'T00:00:00.000Z');
+      if (endDate)   dr.lte = new Date(endDate   + 'T23:59:59.999Z');
+    }
 
     const where: Record<string, unknown> = user.role === 'ADMIN' ? {} : { userId: user.id };
-    if (type)   where.type   = type;
-    if (status) where.status = status;
+    if (type)   where.type      = type;
+    if (status) where.status    = status;
+    if (dr)     where.createdAt = dr;
 
     const entries = await prisma.financialEntry.findMany({
       where,

@@ -190,43 +190,40 @@ reportsRouter.get('/dashboard', async (req: AuthRequest, res: Response, next: Ne
 
 // ─── Sales analytics ─────────────────────────────────────────────────────────
 
+/** Build a Prisma `createdAt` filter from optional ISO date strings. */
+function dateRange(startDate?: string, endDate?: string) {
+  if (!startDate && !endDate) return undefined;
+  const f: { gte?: Date; lte?: Date } = {};
+  if (startDate) f.gte = new Date(startDate + 'T00:00:00.000Z');
+  if (endDate)   f.lte = new Date(endDate   + 'T23:59:59.999Z');
+  return f;
+}
+
 reportsRouter.get('/sales/stats', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const user  = req.user!;
-    const where = user.role === 'ADMIN' ? {} : { userId: user.id };
-    const bWhere = user.role === 'ADMIN' ? {} : { userId: user.id };
+    const { startDate, endDate } = req.query as Record<string, string>;
+    const dr    = dateRange(startDate, endDate);
+    const base  = { ...(user.role !== 'ADMIN' && { userId: user.id }), ...(dr && { createdAt: dr }) };
+    const bBase = { ...(user.role !== 'ADMIN' && { userId: user.id }), ...(dr && { createdAt: dr }) };
 
-    const [totalSales, paidSales, pendingSales, budgetPipeline, monthlySales] = await Promise.all([
-      prisma.sale.aggregate({ where, _sum: { totalAmount: true }, _count: true }),
-      prisma.sale.aggregate({ where: { ...where, status: 'PAID' }, _sum: { totalAmount: true }, _count: true }),
-      prisma.sale.aggregate({ where: { ...where, status: 'PENDING' }, _sum: { totalAmount: true }, _count: true }),
-      prisma.budget.groupBy({ by: ['status'], where: bWhere, _count: true }),
-      // Last 6 months
-      prisma.$queryRaw<{ month: string; total: number; count: number }[]>`
-        SELECT
-          TO_CHAR(DATE_TRUNC('month', "createdAt"), 'YYYY-MM') AS month,
-          SUM("totalAmount")::float AS total,
-          COUNT(*)::int AS count
-        FROM "Sale"
-        WHERE "userId" = ${user.role === 'ADMIN' ? prisma.sale.fields.userId : user.id}
-           OR ${user.role === 'ADMIN'} = true
-        GROUP BY DATE_TRUNC('month', "createdAt")
-        ORDER BY month DESC
-        LIMIT 6
-      `,
+    const [totalSales, paidSales, pendingSales, budgetPipeline] = await Promise.all([
+      prisma.sale.aggregate({ where: base, _sum: { totalAmount: true }, _count: true }),
+      prisma.sale.aggregate({ where: { ...base, status: 'PAID' },    _sum: { totalAmount: true }, _count: true }),
+      prisma.sale.aggregate({ where: { ...base, status: 'PENDING' }, _sum: { totalAmount: true }, _count: true }),
+      prisma.budget.groupBy({ by: ['status'], where: bBase, _count: true, _sum: { totalCost: true } }),
     ]);
 
     res.json({
       success: true,
       data: {
-        totalSalesAmount:   totalSales._sum.totalAmount   || 0,
-        totalSalesCount:    totalSales._count             || 0,
-        paidAmount:         paidSales._sum.totalAmount    || 0,
-        paidCount:          paidSales._count              || 0,
-        pendingAmount:      pendingSales._sum.totalAmount || 0,
-        pendingCount:       pendingSales._count           || 0,
-        budgetPipeline:     budgetPipeline,
-        monthlySales:       monthlySales.reverse(),
+        totalSalesAmount: totalSales._sum.totalAmount   || 0,
+        totalSalesCount:  totalSales._count             || 0,
+        paidAmount:       paidSales._sum.totalAmount    || 0,
+        paidCount:        paidSales._count              || 0,
+        pendingAmount:    pendingSales._sum.totalAmount || 0,
+        pendingCount:     pendingSales._count           || 0,
+        budgetPipeline,
       },
     });
   } catch (err) { next(err); }
@@ -235,53 +232,51 @@ reportsRouter.get('/sales/stats', async (req: AuthRequest, res: Response, next: 
 reportsRouter.get('/sales/by-client', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const user  = req.user!;
-    const where = user.role === 'ADMIN' ? {} : { userId: user.id };
+    const { startDate, endDate } = req.query as Record<string, string>;
+    const dr    = dateRange(startDate, endDate);
+    const where = {
+      ...(user.role !== 'ADMIN' && { userId: user.id }),
+      ...(dr && { createdAt: dr }),
+    };
 
     const sales = await prisma.sale.findMany({
       where,
       include: {
-        budget: {
-          include: {
-            project: { select: { clientName: true, clientEmail: true } },
-          },
-        },
+        budget: { include: { project: { select: { clientName: true } } } },
       },
     });
 
-    // Group by client
     const grouped: Record<string, { clientName: string; count: number; total: number; paid: number; pending: number }> = {};
-    for (const sale of sales) {
-      const client = sale.budget?.project?.clientName || 'Cliente não informado';
-      if (!grouped[client]) {
-        grouped[client] = { clientName: client, count: 0, total: 0, paid: 0, pending: 0 };
-      }
-      grouped[client].count++;
-      grouped[client].total += sale.totalAmount;
-      if (sale.status === 'PAID')    grouped[client].paid    += sale.totalAmount;
-      else                           grouped[client].pending += sale.totalAmount;
+    for (const s of sales) {
+      const name = s.clientName || s.budget?.project?.clientName || 'Não informado';
+      if (!grouped[name]) grouped[name] = { clientName: name, count: 0, total: 0, paid: 0, pending: 0 };
+      grouped[name].count++;
+      grouped[name].total += s.totalAmount;
+      if (s.status === 'PAID') grouped[name].paid    += s.totalAmount;
+      else                     grouped[name].pending += s.totalAmount;
     }
 
-    const result = Object.values(grouped).sort((a, b) => b.total - a.total);
-    res.json({ success: true, data: result });
+    res.json({ success: true, data: Object.values(grouped).sort((a, b) => b.total - a.total) });
   } catch (err) { next(err); }
 });
 
 reportsRouter.get('/sales/pipeline', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const user  = req.user!;
-    const bWhere = user.role === 'ADMIN' ? {} : { userId: user.id };
+    const { startDate, endDate } = req.query as Record<string, string>;
+    const dr     = dateRange(startDate, endDate);
+    const bWhere = {
+      ...(user.role !== 'ADMIN' && { userId: user.id }),
+      ...(dr && { createdAt: dr }),
+    };
 
     const stages = await prisma.budget.groupBy({
-      by:    ['status'],
-      where:  bWhere,
-      _count: true,
-      _sum:   { totalCost: true },
+      by: ['status'], where: bWhere, _count: true, _sum: { totalCost: true },
     });
 
-    const ordered = ['DRAFT', 'PENDING', 'APPROVED', 'REJECTED'];
-    const result = ordered.map(s => {
-      const found = stages.find(st => st.status === s);
-      return { status: s, count: found?._count || 0, total: found?._sum?.totalCost || 0 };
+    const result = ['DRAFT', 'PENDING', 'APPROVED', 'REJECTED'].map(s => {
+      const f = stages.find(st => st.status === s);
+      return { status: s, count: f?._count || 0, total: f?._sum?.totalCost || 0 };
     });
 
     res.json({ success: true, data: result });
@@ -291,41 +286,114 @@ reportsRouter.get('/sales/pipeline', async (req: AuthRequest, res: Response, nex
 reportsRouter.get('/sales/abc', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const user  = req.user!;
-    const bWhere = user.role === 'ADMIN' ? {} : { userId: user.id };
+    const { startDate, endDate } = req.query as Record<string, string>;
+    const dr     = dateRange(startDate, endDate);
+    const bWhere = {
+      ...(user.role !== 'ADMIN' && { userId: user.id }),
+      status: 'APPROVED',
+      ...(dr && { createdAt: dr }),
+    };
 
-    // Aggregate revenue by material from APPROVED budgets
     const items = await prisma.budgetItem.findMany({
-      where: { budget: { ...bWhere, status: 'APPROVED' } },
+      where: { budget: bWhere },
       include: { material: { select: { name: true, type: true } } },
     });
 
-    const materialRevenue: Record<string, { name: string; type: string; revenue: number; area: number; count: number }> = {};
+    const map: Record<string, { name: string; type: string; revenue: number; area: number; count: number }> = {};
     for (const item of items) {
       const k = item.materialId;
-      if (!materialRevenue[k]) {
-        materialRevenue[k] = { name: item.material.name, type: item.material.type, revenue: 0, area: 0, count: 0 };
-      }
-      materialRevenue[k].revenue += item.subtotal;
-      materialRevenue[k].area    += item.area;
-      materialRevenue[k].count++;
+      if (!map[k]) map[k] = { name: item.material.name, type: item.material.type, revenue: 0, area: 0, count: 0 };
+      map[k].revenue += item.subtotal;
+      map[k].area    += item.area;
+      map[k].count++;
     }
 
-    const sorted = Object.values(materialRevenue).sort((a, b) => b.revenue - a.revenue);
+    const sorted = Object.values(map).sort((a, b) => b.revenue - a.revenue);
     const totalRevenue = sorted.reduce((s, m) => s + m.revenue, 0);
-
     let cumulative = 0;
     const result = sorted.map(m => {
       cumulative += m.revenue;
       const cumPct = totalRevenue > 0 ? (cumulative / totalRevenue) * 100 : 0;
-      return {
-        ...m,
-        revenuePct: totalRevenue > 0 ? (m.revenue / totalRevenue) * 100 : 0,
-        cumPct,
-        curve: cumPct <= 80 ? 'A' : cumPct <= 95 ? 'B' : 'C',
-      };
+      return { ...m, revenuePct: totalRevenue > 0 ? (m.revenue / totalRevenue) * 100 : 0, cumPct, curve: cumPct <= 80 ? 'A' : cumPct <= 95 ? 'B' : 'C' };
     });
 
     res.json({ success: true, data: result, totalRevenue });
+  } catch (err) { next(err); }
+});
+
+// ─── Stock report ─────────────────────────────────────────────────────────────
+
+reportsRouter.get('/stock', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const user  = req.user!;
+    const { startDate, endDate } = req.query as Record<string, string>;
+    const dr     = dateRange(startDate, endDate);
+    const bWhere = {
+      ...(user.role !== 'ADMIN' && { userId: user.id }),
+      ...(dr && { createdAt: dr }),
+    };
+
+    // All materials (active and inactive for full visibility)
+    const materials = await prisma.material.findMany({
+      orderBy: [{ type: 'asc' }, { name: 'asc' }],
+    });
+
+    // Area consumed in APPROVED budgets in the date range
+    const approvedItems = await prisma.budgetItem.findMany({
+      where: { budget: { ...bWhere, status: 'APPROVED' } },
+      select: { materialId: true, area: true, subtotal: true },
+    });
+
+    // Area quoted (all statuses except REJECTED) in the date range
+    const quotedItems = await prisma.budgetItem.findMany({
+      where: { budget: { ...bWhere, status: { not: 'REJECTED' } } },
+      select: { materialId: true, area: true },
+    });
+
+    // Build consumption maps
+    const consumed: Record<string, { area: number; revenue: number }> = {};
+    for (const i of approvedItems) {
+      if (!consumed[i.materialId]) consumed[i.materialId] = { area: 0, revenue: 0 };
+      consumed[i.materialId].area    += i.area;
+      consumed[i.materialId].revenue += i.subtotal;
+    }
+
+    const quoted: Record<string, number> = {};
+    for (const i of quotedItems) {
+      quoted[i.materialId] = (quoted[i.materialId] || 0) + i.area;
+    }
+
+    const result = materials.map(m => {
+      const consumedArea  = consumed[m.id]?.area    || 0;
+      const consumedRev   = consumed[m.id]?.revenue || 0;
+      const quotedArea    = quoted[m.id]            || 0;
+      const remaining     = Math.max(m.stock - consumedArea, 0);
+      const stockPct      = m.stock > 0 ? (remaining / m.stock) * 100 : null;
+      const status        = m.stock === 0          ? 'NO_STOCK'
+                          : stockPct! <= 0         ? 'OUT'
+                          : stockPct! <= 20        ? 'CRITICAL'
+                          : stockPct! <= 50        ? 'LOW'
+                          :                          'OK';
+      return {
+        id:           m.id,
+        name:         m.name,
+        type:         m.type,
+        color:        m.color,
+        finish:       m.finish,
+        supplier:     m.supplier,
+        pricePerM2:   m.pricePerM2,
+        stock:        m.stock,
+        consumedArea,
+        consumedRev,
+        quotedArea,
+        remaining,
+        stockPct,
+        status,
+        active:       m.active,
+      };
+    });
+
+    res.json({ success: true, data: result });
   } catch (err) { next(err); }
 });
 

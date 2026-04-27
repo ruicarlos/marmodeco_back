@@ -106,6 +106,7 @@ model Material {
   finish      String?  // POLISHED | BRUSHED | HONED | NATURAL
   thickness   Float?   // cm
   pricePerM2  Float    @default(0)
+  stock       Float    @default(0) // m² disponível em estoque
   unit        String   @default("m²")
   active      Boolean  @default(true)
   imageUrl    String?
