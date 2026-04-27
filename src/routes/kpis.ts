@@ -6,11 +6,20 @@ import { createError } from '../middleware/errorHandler';
 export const kpisRouter = Router();
 kpisRouter.use(authenticate);
 
-// List KPI records for current user
+// List KPI records — admin can filter by companyId, gestor sees own records
 kpisRouter.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
+    const { companyId } = req.query as { companyId?: string };
+    let where: Record<string, unknown>;
+
+    if (req.user!.role === 'ADMIN' && companyId) {
+      where = { companyId };
+    } else {
+      where = { userId: req.user!.id };
+    }
+
     const records = await prisma.kPIRecord.findMany({
-      where: { userId: req.user!.id },
+      where,
       orderBy: { period: 'desc' },
     });
     res.json({ success: true, data: records });
@@ -43,10 +52,15 @@ kpisRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunction)
       resultado = (d / 100) * (p / 100) * (q / 100) * 100; // result in %
     }
 
+    // Admin can pass an explicit companyId to attach the record to a company
+    const targetCompanyId = req.body.companyId
+      ? req.body.companyId
+      : (req.user!.companyId ?? null);
+
     const record = await prisma.kPIRecord.create({
       data: {
         userId: req.user!.id,
-        companyId: req.user!.companyId ?? null,
+        companyId: targetCompanyId,
         type,
         period: new Date(period),
         notes: notes || null,
