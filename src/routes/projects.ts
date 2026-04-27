@@ -133,6 +133,7 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
     // Auto-process DXF files
     const ext = path.extname(req.file.originalname).toLowerCase();
     let roomsCreated = 0;
+    let message = 'Arquivo enviado com sucesso';
 
     if (ext === '.dxf') {
       try {
@@ -157,15 +158,20 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
           where: { id: file.id },
           data: { processed: true, processedAt: new Date() },
         });
+
+        message = roomsCreated > 0
+          ? `Arquivo DXF processado: ${roomsCreated} ambiente(s) identificado(s) automaticamente`
+          : 'Arquivo DXF enviado, mas nenhum ambiente foi identificado. Verifique se o arquivo contém polilínhas fechadas.';
       } catch (processingError) {
         console.error('DXF processing error:', processingError);
-        // Don't fail the upload — just mark as unprocessed
+        message = 'Arquivo enviado, mas ocorreu um erro ao processar o DXF. Adicione os ambientes manualmente.';
       }
+    } else if (ext === '.dwg') {
+      // DWG is a binary proprietary format — pure Node.js parsing is not supported.
+      // The file is stored for reference; rooms must be added manually or the user
+      // should re-export the file as DXF from AutoCAD/BricsCAD/LibreCAD.
+      message = 'Arquivo DWG enviado com sucesso. A extração automática de ambientes não é suportada para DWG. Converta o arquivo para DXF no AutoCAD ou BricsCAD e faça o upload novamente para identificar os ambientes automaticamente.';
     }
-
-    const message = roomsCreated > 0
-      ? `Arquivo processado: ${roomsCreated} ambiente(s) identificado(s) automaticamente`
-      : 'Arquivo enviado com sucesso';
 
     res.status(201).json({ success: true, data: { ...file, roomsCreated }, message });
   } catch (err) { next(err); }
