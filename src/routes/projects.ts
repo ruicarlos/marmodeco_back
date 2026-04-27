@@ -141,14 +141,19 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
         const extracted = processDXFFile(req.file.path);
 
         if (extracted.length > 0) {
+          // Count existing rooms so the increment continues correctly on re-upload
+          const existingCount = await prisma.room.count({ where: { projectId: req.params.id } });
+          // Sanitise project name: keep letters/numbers/spaces, collapse spaces
+          const projectSlug = project.name.replace(/[^a-zA-ZÀ-ÿ0-9\s]/g, '').trim();
+
           await prisma.room.createMany({
-            data: extracted.map(r => ({
+            data: extracted.map((r, i) => ({
               projectId: req.params.id,
               fileId: file.id,
-              name: r.name,
+              name: `${projectSlug}Ambiente${existingCount + i + 1}`,
               area: r.area,
               perimeter: r.perimeter,
-              notes: `Camada: ${r.layer}`,
+              notes: `Camada: ${r.layer} · Original: ${r.name}`,
               isManual: false,
             })),
           });
