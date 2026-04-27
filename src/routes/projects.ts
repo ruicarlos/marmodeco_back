@@ -23,10 +23,9 @@ const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['.pdf', '.dwg', '.dxf'];
     const ext = path.extname(file.originalname).toLowerCase();
-    if (allowed.includes(ext)) cb(null, true);
-    else cb(new Error('Formato não suportado. Use PDF, DWG ou DXF'));
+    if (ext === '.dxf') cb(null, true);
+    else cb(new Error('Formato não suportado. Use apenas arquivos DXF'));
   },
 });
 
@@ -166,11 +165,6 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
         console.error('DXF processing error:', processingError);
         message = 'Arquivo enviado, mas ocorreu um erro ao processar o DXF. Adicione os ambientes manualmente.';
       }
-    } else if (ext === '.dwg') {
-      // DWG is a binary proprietary format — pure Node.js parsing is not supported.
-      // The file is stored for reference; rooms must be added manually or the user
-      // should re-export the file as DXF from AutoCAD/BricsCAD/LibreCAD.
-      message = 'Arquivo DWG enviado com sucesso. A extração automática de ambientes não é suportada para DWG. Converta o arquivo para DXF no AutoCAD ou BricsCAD e faça o upload novamente para identificar os ambientes automaticamente.';
     }
 
     res.status(201).json({ success: true, data: { ...file, roomsCreated }, message });
