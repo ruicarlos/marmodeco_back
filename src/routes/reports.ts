@@ -188,6 +188,29 @@ reportsRouter.get('/dashboard', async (req: AuthRequest, res: Response, next: Ne
   } catch (err) { next(err); }
 });
 
+// ─── PDF helpers ─────────────────────────────────────────────────────────────
+const NAVY  = '#1a2e5a';
+const GOLD  = '#b8935a';
+const GRAY  = '#64748b';
+const LIGHT = '#f8fafc';
+const PAGE_W = 595.28;
+const MARGIN = 45;
+const CONTENT_W = PAGE_W - MARGIN * 2;
+
+const TYPE_PT: Record<string, string> = {
+  MARBLE: 'Mármore', GRANITE: 'Granito', QUARTZITE: 'Quartzito', OTHER: 'Outro',
+};
+const FINISH_PT: Record<string, string> = {
+  POLISHED: 'Polido', BRUSHED: 'Escovado', HONED: 'Amaciado', NATURAL: 'Natural',
+};
+const STATUS_PT: Record<string, string> = {
+  DRAFT: 'Rascunho', PENDING: 'Pendente', APPROVED: 'Aprovado', REJECTED: 'Rejeitado',
+};
+
+function brl(n: number) {
+  return 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // Export budget as PDF
 reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -205,33 +228,79 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
 
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const doc = new PDFDocument({ margin: MARGIN, size: 'A4', bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="orcamento-${budget.id}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="orcamento-${budget.id}.pdf"`);
     doc.pipe(res);
 
-    // Header
-    doc.fontSize(20).fillColor('#1a1a2e').text('MARMODECOR', { align: 'center' });
-    doc.fontSize(12).fillColor('#666').text('Sistema de Automação de Orçamentação', { align: 'center' });
-    doc.moveDown();
-    doc.strokeColor('#c8a96e').lineWidth(2).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-    doc.moveDown();
+    // ── Page background ───────────────────────────────────────────────────────
+    doc.rect(0, 0, PAGE_W, 110).fill(NAVY);
 
-    // Budget info
-    doc.fontSize(16).fillColor('#1a1a2e').text(`Orçamento: ${budget.name}`);
-    doc.fontSize(10).fillColor('#444');
-    doc.text(`Projeto: ${budget.project.name}`);
-    doc.text(`Cliente: ${budget.project.clientName || 'Não informado'}`);
-    doc.text(`Responsável: ${budget.user.name}`);
-    doc.text(`Data: ${new Date(budget.createdAt).toLocaleDateString('pt-BR')}`);
-    doc.text(`Status: ${budget.status}`);
-    if (budget.validUntil) doc.text(`Validade: ${new Date(budget.validUntil).toLocaleDateString('pt-BR')}`);
-    doc.moveDown();
+    // ── Brand header ──────────────────────────────────────────────────────────
+    doc.fontSize(26).fillColor('white').font('Helvetica-Bold')
+      .text('MARMODECOR', MARGIN, 28, { align: 'left' });
+    doc.fontSize(9).fillColor('#94a3b8').font('Helvetica')
+      .text('Orçamentação de Mármores e Granitos', MARGIN, 58);
 
-    // Items table
-    doc.fontSize(13).fillColor('#1a1a2e').text('Detalhamento por Ambiente');
-    doc.moveDown(0.5);
+    // Quote number / status badge
+    const statusLabel = STATUS_PT[budget.status] ?? budget.status;
+    doc.fontSize(9).fillColor(GOLD).font('Helvetica-Bold')
+      .text(`Orçamento #${budget.id.substring(0, 8).toUpperCase()}`, MARGIN, 80);
 
+    // ── Info strip ─────────────────────────────────────────────────────────────
+    const infoY = 120;
+    doc.rect(MARGIN, infoY, CONTENT_W, 60).fill(LIGHT).stroke('#e2e8f0');
+
+    const col = CONTENT_W / 4;
+    const infoItems = [
+      { label: 'PROJETO', value: budget.project.name },
+      { label: 'CLIENTE', value: budget.project.clientName || '—' },
+      { label: 'EMITIDO EM', value: new Date(budget.createdAt).toLocaleDateString('pt-BR') },
+      { label: 'VALIDADE', value: budget.validUntil ? new Date(budget.validUntil).toLocaleDateString('pt-BR') : '—' },
+    ];
+    infoItems.forEach((item, i) => {
+      const x = MARGIN + i * col + 8;
+      doc.fontSize(7).fillColor(GRAY).font('Helvetica').text(item.label, x, infoY + 10, { width: col - 10 });
+      doc.fontSize(9).fillColor(NAVY).font('Helvetica-Bold').text(item.value, x, infoY + 23, { width: col - 10 });
+    });
+
+    // Status pill
+    const statusColor = budget.status === 'APPROVED' ? '#16a34a'
+      : budget.status === 'REJECTED' ? '#dc2626'
+      : budget.status === 'PENDING' ? '#d97706' : GRAY;
+    doc.roundedRect(PAGE_W - MARGIN - 70, infoY + 36, 70, 16, 4).fill(statusColor);
+    doc.fontSize(8).fillColor('white').font('Helvetica-Bold')
+      .text(statusLabel, PAGE_W - MARGIN - 70, infoY + 41, { width: 70, align: 'center' });
+
+    // ── Section title ─────────────────────────────────────────────────────────
+    let y = infoY + 76;
+    doc.fontSize(11).fillColor(NAVY).font('Helvetica-Bold').text('DETALHAMENTO POR AMBIENTE', MARGIN, y);
+    doc.moveTo(MARGIN, y + 16).lineTo(MARGIN + CONTENT_W, y + 16).lineWidth(1.5).strokeColor(GOLD).stroke();
+    y += 24;
+
+    // ── Table header ──────────────────────────────────────────────────────────
+    const cols = { mat: 190, tipo: 70, acab: 65, area: 55, preco: 60, sub: 65 };
+    const drawTableHeader = (startY: number) => {
+      doc.rect(MARGIN, startY, CONTENT_W, 18).fill(NAVY);
+      doc.fontSize(7.5).fillColor('white').font('Helvetica-Bold');
+      let x = MARGIN + 4;
+      doc.text('MATERIAL', x, startY + 5, { width: cols.mat });
+      x += cols.mat;
+      doc.text('TIPO', x, startY + 5, { width: cols.tipo });
+      x += cols.tipo;
+      doc.text('ACABAMENTO', x, startY + 5, { width: cols.acab });
+      x += cols.acab;
+      doc.text('ÁREA (m²)', x, startY + 5, { width: cols.area, align: 'right' });
+      x += cols.area;
+      doc.text('R$/m²', x, startY + 5, { width: cols.preco, align: 'right' });
+      x += cols.preco;
+      doc.text('SUBTOTAL', x, startY + 5, { width: cols.sub - 4, align: 'right' });
+      return startY + 18;
+    };
+
+    y = drawTableHeader(y);
+
+    // Group items by room
     const roomGroups: Record<string, typeof budget.items> = {};
     for (const item of budget.items) {
       const key = item.room.name;
@@ -239,42 +308,116 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
       roomGroups[key].push(item);
     }
 
+    let rowColor = false;
     for (const [roomName, items] of Object.entries(roomGroups)) {
-      doc.fontSize(11).fillColor('#c8a96e').text(`Ambiente: ${roomName}`);
-      doc.fontSize(9).fillColor('#333');
-
-      let roomTotal = 0;
-      for (const item of items) {
-        const subtotal = item.area * item.unitPrice;
-        roomTotal += subtotal;
-        doc.text(
-          `  ${item.material.name} (${item.material.type}) — ${item.area.toFixed(2)} m² × R$ ${item.unitPrice.toFixed(2)} = R$ ${subtotal.toFixed(2)}`
-        );
+      // Check page space
+      if (y > 730) {
+        doc.addPage();
+        doc.rect(0, 0, PAGE_W, 36).fill(NAVY);
+        doc.fontSize(9).fillColor('white').font('Helvetica').text('MARMODECOR — continuação', MARGIN, 14);
+        y = 50;
+        y = drawTableHeader(y);
       }
-      doc.fontSize(10).fillColor('#1a1a2e').text(`  Subtotal ${roomName}: R$ ${roomTotal.toFixed(2)}`, { align: 'right' });
-      doc.moveDown(0.5);
+
+      // Room header row
+      const roomArea = items.reduce((s, i) => s + i.area, 0);
+      const roomTotal = items.reduce((s, i) => s + i.subtotal, 0);
+      doc.rect(MARGIN, y, CONTENT_W, 16).fill('#e8edf5');
+      doc.fontSize(8).fillColor(NAVY).font('Helvetica-Bold')
+        .text(`  ${roomName}`, MARGIN + 4, y + 4, { width: cols.mat + cols.tipo + cols.acab + cols.area - 8 });
+      doc.text(`${roomArea.toFixed(2)} m²  →  ${brl(roomTotal)}`,
+        MARGIN + cols.mat + cols.tipo + cols.acab + cols.area, y + 4,
+        { width: cols.preco + cols.sub - 4, align: 'right' });
+      y += 16;
+
+      // Item rows
+      for (const item of items) {
+        if (y > 740) {
+          doc.addPage();
+          doc.rect(0, 0, PAGE_W, 36).fill(NAVY);
+          doc.fontSize(9).fillColor('white').font('Helvetica').text('MARMODECOR — continuação', MARGIN, 14);
+          y = 50;
+          y = drawTableHeader(y);
+        }
+
+        const bg = rowColor ? '#f8fafc' : 'white';
+        rowColor = !rowColor;
+        doc.rect(MARGIN, y, CONTENT_W, 18).fill(bg);
+        doc.fontSize(8.5).fillColor('#1e293b').font('Helvetica');
+
+        let x = MARGIN + 4;
+        doc.text(item.material.name, x, y + 5, { width: cols.mat - 4 });
+        x += cols.mat;
+        doc.text(TYPE_PT[item.material.type] ?? item.material.type, x, y + 5, { width: cols.tipo - 4 });
+        x += cols.tipo;
+        doc.text(FINISH_PT[item.material.finish ?? ''] ?? (item.material.finish ?? '—'), x, y + 5, { width: cols.acab - 4 });
+        x += cols.acab;
+        doc.text(item.area.toFixed(2), x, y + 5, { width: cols.area - 4, align: 'right' });
+        x += cols.area;
+        doc.text(item.unitPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }), x, y + 5, { width: cols.preco - 4, align: 'right' });
+        x += cols.preco;
+        doc.font('Helvetica-Bold')
+          .text(item.subtotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 }), x, y + 5, { width: cols.sub - 8, align: 'right' });
+
+        // thin bottom border
+        doc.moveTo(MARGIN, y + 18).lineTo(MARGIN + CONTENT_W, y + 18)
+          .lineWidth(0.3).strokeColor('#e2e8f0').stroke();
+        y += 18;
+      }
+      y += 4;
     }
 
-    doc.strokeColor('#ddd').lineWidth(1).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-    doc.moveDown(0.5);
+    // ── Financial summary ─────────────────────────────────────────────────────
+    y += 8;
+    if (y > 680) { doc.addPage(); y = 60; }
 
-    // Totals
-    doc.fontSize(11).fillColor('#444');
-    doc.text(`Materiais: R$ ${(budget.totalCost - budget.laborCost - budget.extraCost + budget.discount).toFixed(2)}`, { align: 'right' });
-    if (budget.laborCost) doc.text(`Mão de obra: R$ ${budget.laborCost.toFixed(2)}`, { align: 'right' });
-    if (budget.extraCost) doc.text(`Extras: R$ ${budget.extraCost.toFixed(2)}`, { align: 'right' });
-    if (budget.discount) doc.text(`Desconto: -R$ ${budget.discount.toFixed(2)}`, { align: 'right' });
-    doc.moveDown(0.3);
-    doc.strokeColor('#c8a96e').lineWidth(1.5).moveTo(400, doc.y).lineTo(545, doc.y).stroke();
-    doc.moveDown(0.3);
-    doc.fontSize(14).fillColor('#1a1a2e').text(`TOTAL: R$ ${budget.totalCost.toFixed(2)}`, { align: 'right' });
-    doc.moveDown(0.5);
-    doc.fontSize(10).fillColor('#444').text(`Área total: ${budget.totalArea.toFixed(2)} m²`, { align: 'right' });
+    doc.moveTo(MARGIN, y).lineTo(MARGIN + CONTENT_W, y).lineWidth(1).strokeColor('#e2e8f0').stroke();
+    y += 12;
 
+    const materialsCost = budget.totalCost - budget.laborCost - budget.extraCost + budget.discount;
+    const summaryLines: [string, number][] = [
+      ['Materiais', materialsCost],
+    ];
+    if (budget.laborCost) summaryLines.push(['Mão de Obra', budget.laborCost]);
+    if (budget.extraCost) summaryLines.push(['Custos Extras', budget.extraCost]);
+    if (budget.discount)  summaryLines.push(['Desconto', -budget.discount]);
+
+    for (const [label, value] of summaryLines) {
+      doc.fontSize(9).fillColor(GRAY).font('Helvetica')
+        .text(label, PAGE_W - MARGIN - 220, y, { width: 140, align: 'right' });
+      doc.fillColor(value < 0 ? '#dc2626' : '#1e293b').font('Helvetica-Bold')
+        .text((value < 0 ? '−' : '') + brl(Math.abs(value)), PAGE_W - MARGIN - 80, y, { width: 80, align: 'right' });
+      y += 16;
+    }
+
+    // Total box
+    y += 4;
+    doc.rect(PAGE_W - MARGIN - 210, y, 210, 36).fill(NAVY);
+    doc.fontSize(10).fillColor('#94a3b8').font('Helvetica')
+      .text('TOTAL GERAL', PAGE_W - MARGIN - 206, y + 6, { width: 100 });
+    doc.fontSize(16).fillColor('white').font('Helvetica-Bold')
+      .text(brl(budget.totalCost), PAGE_W - MARGIN - 90, y + 4, { width: 86, align: 'right' });
+
+    // Area tag
+    doc.fontSize(8.5).fillColor(GRAY).font('Helvetica')
+      .text(`Área total: ${budget.totalArea.toFixed(2)} m²`, MARGIN, y + 12);
+
+    // Notes
     if (budget.notes) {
-      doc.moveDown();
-      doc.fontSize(10).fillColor('#666').text(`Observações: ${budget.notes}`);
+      y += 50;
+      doc.rect(MARGIN, y, CONTENT_W, 1).fill(GOLD);
+      y += 8;
+      doc.fontSize(9).fillColor(GRAY).font('Helvetica-Bold').text('OBSERVAÇÕES', MARGIN, y);
+      y += 14;
+      doc.fontSize(9).fillColor('#475569').font('Helvetica').text(budget.notes, MARGIN, y, { width: CONTENT_W });
     }
+
+    // ── Footer ────────────────────────────────────────────────────────────────
+    const footerY = 810;
+    doc.moveTo(MARGIN, footerY).lineTo(PAGE_W - MARGIN, footerY).lineWidth(0.5).strokeColor('#cbd5e1').stroke();
+    doc.fontSize(7.5).fillColor(GRAY).font('Helvetica')
+      .text(`Emitido por ${budget.user.name} em ${new Date().toLocaleDateString('pt-BR')}`, MARGIN, footerY + 6)
+      .text('MARMODECOR — Sistema de Orçamentação', PAGE_W - MARGIN - 200, footerY + 6, { width: 200, align: 'right' });
 
     doc.end();
   } catch (err) { next(err); }

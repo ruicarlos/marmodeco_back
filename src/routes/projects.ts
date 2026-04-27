@@ -19,13 +19,15 @@ const storage = multer.diskStorage({
   },
 });
 
+const ACCEPTED_EXTS = ['.dxf', '.jpg', '.jpeg', '.png', '.gif', '.pdf'];
+
 const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.dxf') cb(null, true);
-    else cb(new Error('Formato não suportado. Use apenas arquivos DXF'));
+    if (ACCEPTED_EXTS.includes(ext)) cb(null, true);
+    else cb(new Error('Formato não suportado. Use DXF, JPG, PNG ou PDF'));
   },
 });
 
@@ -129,7 +131,7 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
       },
     });
 
-    // Auto-process DXF files
+    // Auto-process DXF files; images/PDF are stored as reference only
     const ext = path.extname(req.file.originalname).toLowerCase();
     let roomsCreated = 0;
     let message = 'Arquivo enviado com sucesso';
@@ -165,6 +167,13 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
         console.error('DXF processing error:', processingError);
         message = 'Arquivo enviado, mas ocorreu um erro ao processar o DXF. Adicione os ambientes manualmente.';
       }
+    } else {
+      // Image / PDF — stored as reference, mark as processed immediately
+      await prisma.projectFile.update({
+        where: { id: file.id },
+        data: { processed: true, processedAt: new Date() },
+      });
+      message = 'Imagem de referência enviada. Adicione ou confirme os ambientes manualmente.';
     }
 
     res.status(201).json({ success: true, data: { ...file, roomsCreated }, message });
