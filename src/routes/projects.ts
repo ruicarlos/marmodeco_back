@@ -212,3 +212,63 @@ projectsRouter.delete('/:id/rooms/:roomId', async (_req: AuthRequest, res: Respo
     res.json({ success: true, message: 'Ambiente excluído' });
   } catch (err) { next(err); }
 });
+
+// ─── Auto-generate budget with smart material suggestions per room ──────────
+projectsRouter.post('/:id/auto-budget', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = await prisma.project.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+      include: { rooms: true },
+    });
+    if (!project) throw createError('Projeto não encontrado', 404);
+    if (project.rooms.length === 0)
+      throw createError('O projeto não possui ambientes. Importe um arquivo DXF ou adicione ambientes manualmente.', 400);
+
+    const materials = await prisma.material.findMany({
+      where: { active: true },
+      orderBy: { pricePerM2: 'asc' },
+    });
+    if (materials.length === 0) throw createError('Nenhum material cadastrado no sistema.', 400);
+
+    // Heuristic: suggest material type based on room name keywords
+    const suggest = (name: string) => {
+      const n = name.toLowerCase();
+      const granite = ['cozinha', 'churrasqueira', 'externo', 'externa', 'garagem', 'lavanderia', 'serviço', 'servico'];
+      const marble  = ['banheiro', 'lavabo', 'suite', 'suíte', 'sala', 'quarto', 'hall', 'corredor', 'varanda'];
+      if (granite.some(w => n.includes(w))) return materials.find(m => m.type === 'GRANITE') ?? materials[0];
+      if (marble.some(w  => n.includes(w))) return materials.find(m => m.type === 'MARBLE')  ?? materials[0];
+      return materials[0];
+    };
+
+    let totalArea = 0;
+    let totalCost = 0;
+    const itemsData = project.rooms.map(room => {
+      const mat = suggest(room.name);
+      const subtotal = room.area * mat.pricePerM2;
+      totalArea += room.area;
+      totalCost += subtotal;
+      return { roomId: room.id, materialId: mat.id, area: room.area, quantity: 1, unitPrice: mat.pricePerM2, subtotal };
+    });
+
+    const budget = await prisma.budget.create({
+      data: {
+        projectId: project.id,
+        userId: req.user!.id,
+        name: req.body.name || `Orçamento — ${project.name}`,
+        totalArea,
+        totalCost,
+        items: { create: itemsData },
+      },
+      include: {
+        items: { include: { room: true, material: true } },
+        project: { select: { id: true, name: true } },
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      data: budget,
+      message: `Orçamento gerado com ${project.rooms.length} ambiente(s)`,
+    });
+  } catch (err) { next(err); }
+});

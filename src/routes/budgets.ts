@@ -152,3 +152,83 @@ budgetsRouter.delete('/:id', async (req: AuthRequest, res: Response, next: NextF
     res.json({ success: true, message: 'Orçamento excluído' });
   } catch (err) { next(err); }
 });
+
+// ─── Helper: recalculate budget totals from items ────────────────────────────
+async function recalcBudget(budgetId: string) {
+  const budget = await prisma.budget.findUnique({ where: { id: budgetId } });
+  if (!budget) return;
+  const items = await prisma.budgetItem.findMany({ where: { budgetId } });
+  const totalArea = items.reduce((s, i) => s + i.area, 0);
+  const materialCost = items.reduce((s, i) => s + i.subtotal, 0);
+  const totalCost = materialCost + budget.laborCost + budget.extraCost - budget.discount;
+  await prisma.budget.update({ where: { id: budgetId }, data: { totalArea, totalCost } });
+}
+
+// ─── Add item to existing budget ─────────────────────────────────────────────
+budgetsRouter.post('/:id/items', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const budget = await prisma.budget.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!budget) throw createError('Orçamento não encontrado', 404);
+
+    const { roomId, materialId, area, unitPrice, notes } = req.body;
+    if (!roomId || !materialId) throw createError('Ambiente e material são obrigatórios');
+
+    const a = parseFloat(area) || 0;
+    const p = parseFloat(unitPrice) || 0;
+
+    await prisma.budgetItem.create({
+      data: { budgetId: req.params.id, roomId, materialId, area: a, quantity: 1, unitPrice: p, subtotal: a * p, notes: notes || null },
+    });
+    await recalcBudget(req.params.id);
+
+    const updated = await prisma.budget.findUnique({
+      where: { id: req.params.id },
+      include: { items: { include: { room: true, material: true } }, project: { select: { id: true, name: true } } },
+    });
+    res.status(201).json({ success: true, data: updated });
+  } catch (err) { next(err); }
+});
+
+// ─── Update a budget item ─────────────────────────────────────────────────────
+budgetsRouter.put('/:id/items/:itemId', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const budget = await prisma.budget.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!budget) throw createError('Orçamento não encontrado', 404);
+
+    const item = await prisma.budgetItem.findFirst({ where: { id: req.params.itemId, budgetId: req.params.id } });
+    if (!item) throw createError('Item não encontrado', 404);
+
+    const { materialId, area, unitPrice, notes } = req.body;
+    const newArea  = area      !== undefined ? parseFloat(area)      : item.area;
+    const newPrice = unitPrice !== undefined ? parseFloat(unitPrice) : item.unitPrice;
+    const update: Record<string, unknown> = { area: newArea, unitPrice: newPrice, subtotal: newArea * newPrice };
+    if (materialId !== undefined) update.materialId = materialId;
+    if (notes      !== undefined) update.notes = notes;
+
+    await prisma.budgetItem.update({ where: { id: req.params.itemId }, data: update });
+    await recalcBudget(req.params.id);
+
+    const updated = await prisma.budget.findUnique({
+      where: { id: req.params.id },
+      include: { items: { include: { room: true, material: true } }, project: { select: { id: true, name: true } } },
+    });
+    res.json({ success: true, data: updated });
+  } catch (err) { next(err); }
+});
+
+// ─── Delete a budget item ─────────────────────────────────────────────────────
+budgetsRouter.delete('/:id/items/:itemId', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const budget = await prisma.budget.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!budget) throw createError('Orçamento não encontrado', 404);
+    await prisma.budgetItem.delete({ where: { id: req.params.itemId } });
+    await recalcBudget(req.params.id);
+    res.json({ success: true, message: 'Item removido' });
+  } catch (err) { next(err); }
+});
