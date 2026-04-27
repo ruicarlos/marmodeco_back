@@ -16,14 +16,14 @@ materialsRouter.get('/', async (_req, res: Response, next: NextFunction) => {
   } catch (err) { next(err); }
 });
 
-materialsRouter.get('/all', requireAdmin, async (_req, res: Response, next: NextFunction) => {
+materialsRouter.get('/all', async (_req, res: Response, next: NextFunction) => {
   try {
     const materials = await prisma.material.findMany({ orderBy: [{ type: 'asc' }, { name: 'asc' }] });
     res.json({ success: true, data: materials });
   } catch (err) { next(err); }
 });
 
-materialsRouter.post('/', requireAdmin, async (req: AuthRequest, res: Response, next: NextFunction) => {
+materialsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { name, type, color, finish, thickness, pricePerM2, description, supplier } = req.body;
     if (!name || !type) throw createError('Nome e tipo do material são obrigatórios');
@@ -35,7 +35,7 @@ materialsRouter.post('/', requireAdmin, async (req: AuthRequest, res: Response, 
   } catch (err) { next(err); }
 });
 
-materialsRouter.put('/:id', requireAdmin, async (req: AuthRequest, res: Response, next: NextFunction) => {
+materialsRouter.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const data = { ...req.body };
     if (data.pricePerM2) data.pricePerM2 = parseFloat(data.pricePerM2);
@@ -45,7 +45,7 @@ materialsRouter.put('/:id', requireAdmin, async (req: AuthRequest, res: Response
   } catch (err) { next(err); }
 });
 
-materialsRouter.delete('/:id', requireAdmin, async (_req: AuthRequest, res: Response, next: NextFunction) => {
+materialsRouter.delete('/:id', async (_req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     await prisma.material.update({ where: { id: _req.params.id }, data: { active: false } });
     res.json({ success: true, message: 'Material desativado' });

@@ -42,7 +42,9 @@ budgetsRouter.get('/:id', async (req: AuthRequest, res: Response, next: NextFunc
       },
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
-    res.json({ success: true, data: budget });
+    // Ensure totalArea reflects actual items (fixes legacy 0.00 m² entries)
+    const realArea = (budget.items ?? []).reduce((s, i) => s + i.area, 0);
+    res.json({ success: true, data: { ...budget, totalArea: realArea } });
   } catch (err) { next(err); }
 });
 
@@ -120,6 +122,19 @@ budgetsRouter.put('/:id', async (req: AuthRequest, res: Response, next: NextFunc
     if (extraCost !== undefined) updates.extraCost = parseFloat(extraCost);
     if (discount !== undefined) updates.discount = parseFloat(discount);
     if (status === 'APPROVED') updates.approvedAt = new Date();
+
+    // Recalculate totalArea and totalCost from current items + updated costs
+    const current = await prisma.budget.findUnique({ where: { id: req.params.id } });
+    if (current) {
+      const items = await prisma.budgetItem.findMany({ where: { budgetId: req.params.id } });
+      const area = items.reduce((s, i) => s + i.area, 0);
+      const materialCost = items.reduce((s, i) => s + i.subtotal, 0);
+      const labor = updates.laborCost !== undefined ? (updates.laborCost as number) : current.laborCost;
+      const extra = updates.extraCost !== undefined ? (updates.extraCost as number) : current.extraCost;
+      const disc  = updates.discount  !== undefined ? (updates.discount  as number) : current.discount;
+      updates.totalArea = area;
+      updates.totalCost = materialCost + labor + extra - disc;
+    }
 
     const budget = await prisma.budget.update({ where: { id: req.params.id }, data: updates });
     res.json({ success: true, data: budget });

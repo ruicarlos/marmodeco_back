@@ -22,6 +22,7 @@ model User {
   projects    Project[]
   budgets     Budget[]
   auditLogs   AuditLog[]
+  kpiRecords  KPIRecord[]
 }
 
 model Company {
@@ -36,8 +37,9 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users    User[]
-  projects Project[]
+  users      User[]
+  projects   Project[]
+  kpiRecords KPIRecord[]
 }
 
 model Project {
@@ -48,6 +50,8 @@ model Project {
   clientEmail String?
   clientPhone String?
   status      String   @default("DRAFT") // DRAFT | IN_PROGRESS | COMPLETED | CANCELLED
+  projectType String?  // RESIDENCIAL | COMERCIAL | INDUSTRIAL | OUTRO
+  deadline    DateTime?
   userId      String
   user        User     @relation(fields: [userId], references: [id])
   companyId   String?
@@ -163,6 +167,29 @@ model SubscriptionPlan {
   active        Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+model KPIRecord {
+  id                 String   @id @default(uuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id])
+  companyId          String?
+  company            Company? @relation(fields: [companyId], references: [id])
+  type               String   // PRODUTIVIDADE | OEE
+  period             DateTime // mês/ano de referência
+  // Produtividade
+  unidadesProduzidas Float?
+  horasTrabalhadas   Float?
+  numOperadores      Int?
+  // OEE
+  disponibilidade    Float?   // %
+  desempenho         Float?   // %
+  qualidade          Float?   // %
+  // Resultado calculado
+  resultado          Float    @default(0)
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model AuditLog {
