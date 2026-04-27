@@ -143,9 +143,9 @@ model BudgetItem {
   budgetId   String
   budget     Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
   roomId     String
-  room       Room     @relation(fields: [roomId], references: [id])
+  room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
   materialId String
-  material   Material @relation(fields: [materialId], references: [id])
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
   area       Float    @default(0)
   quantity   Float    @default(0)
   unitPrice  Float    @default(0)
