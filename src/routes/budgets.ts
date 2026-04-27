@@ -32,17 +32,13 @@ budgetsRouter.get('/:id', async (req: AuthRequest, res: Response, next: NextFunc
       where,
       include: {
         project: { select: { id: true, name: true, clientName: true, clientEmail: true } },
-        user: { select: { id: true, name: true, email: true } },
-        items: {
-          include: {
-            room: true,
-            material: true,
-          },
-        },
+        user:    { select: { id: true, name: true, email: true } },
+        seller:  { select: { id: true, name: true, email: true, phone: true, commission: true } },
+        items:       { include: { room: true, material: true } },
+        adjustments: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
-    // Ensure totalArea reflects actual items (fixes legacy 0.00 m² entries)
     const realArea = (budget.items ?? []).reduce((s, i) => s + i.area, 0);
     res.json({ success: true, data: { ...budget, totalArea: realArea } });
   } catch (err) { next(err); }
@@ -50,7 +46,7 @@ budgetsRouter.get('/:id', async (req: AuthRequest, res: Response, next: NextFunc
 
 budgetsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { projectId, name, notes, validUntil, laborCost, extraCost, discount, items } = req.body;
+    const { projectId, name, notes, validUntil, laborCost, extraCost, discount, sellerId, items, adjustments } = req.body;
     if (!projectId || !name) throw createError('Projeto e nome do orçamento são obrigatórios');
 
     const project = await prisma.project.findFirst({
@@ -60,22 +56,34 @@ budgetsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFuncti
 
     // Calculate totals
     let totalArea = 0;
-    let totalCost = 0;
+    let materialCost = 0;
 
     if (items && Array.isArray(items)) {
       for (const item of items) {
         const area = parseFloat(item.area) || 0;
         const unitPrice = parseFloat(item.unitPrice) || 0;
-        const subtotal = area * unitPrice;
         totalArea += area;
-        totalCost += subtotal;
+        materialCost += area * unitPrice;
       }
     }
 
     const labor = parseFloat(laborCost) || 0;
     const extra = parseFloat(extraCost) || 0;
-    const disc = parseFloat(discount) || 0;
-    const finalCost = totalCost + labor + extra - disc;
+    const disc  = parseFloat(discount)  || 0;
+
+    // Compute adjustments
+    let adjTotal = 0;
+    const adjData: { description: string; type: string; valueType: string; value: number }[] = [];
+    if (adjustments && Array.isArray(adjustments)) {
+      for (const adj of adjustments) {
+        const v = parseFloat(adj.value) || 0;
+        const computed = adj.valueType === 'PERCENT' ? materialCost * v / 100 : v;
+        adjTotal += adj.type === 'COST' ? computed : -computed;
+        adjData.push({ description: adj.description, type: adj.type, valueType: adj.valueType, value: v });
+      }
+    }
+
+    const finalCost = materialCost + labor + extra - disc + adjTotal;
 
     const budget = await prisma.budget.create({
       data: {
@@ -89,21 +97,25 @@ budgetsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFuncti
         discount: disc,
         totalArea,
         totalCost: finalCost,
+        ...(sellerId && { sellerId }),
         items: items && Array.isArray(items) ? {
           create: items.map((item: { roomId: string; materialId: string; area: number; quantity: number; unitPrice: number; notes?: string }) => ({
-            roomId: item.roomId,
+            roomId:     item.roomId,
             materialId: item.materialId,
-            area: parseFloat(String(item.area)) || 0,
-            quantity: parseFloat(String(item.quantity)) || 1,
-            unitPrice: parseFloat(String(item.unitPrice)) || 0,
-            subtotal: (parseFloat(String(item.area)) || 0) * (parseFloat(String(item.unitPrice)) || 0),
+            area:       parseFloat(String(item.area))      || 0,
+            quantity:   parseFloat(String(item.quantity))  || 1,
+            unitPrice:  parseFloat(String(item.unitPrice)) || 0,
+            subtotal:  (parseFloat(String(item.area)) || 0) * (parseFloat(String(item.unitPrice)) || 0),
             notes: item.notes,
           })),
         } : undefined,
+        adjustments: adjData.length > 0 ? { create: adjData } : undefined,
       },
       include: {
-        items: { include: { room: true, material: true } },
-        project: { select: { id: true, name: true } },
+        items:       { include: { room: true, material: true } },
+        adjustments: true,
+        seller:      true,
+        project:     { select: { id: true, name: true } },
       },
     });
 
@@ -153,14 +165,23 @@ budgetsRouter.delete('/:id', async (req: AuthRequest, res: Response, next: NextF
   } catch (err) { next(err); }
 });
 
-// ─── Helper: recalculate budget totals from items ────────────────────────────
+// ─── Helper: recalculate budget totals from items + adjustments ──────────────
 async function recalcBudget(budgetId: string) {
   const budget = await prisma.budget.findUnique({ where: { id: budgetId } });
   if (!budget) return;
-  const items = await prisma.budgetItem.findMany({ where: { budgetId } });
-  const totalArea = items.reduce((s, i) => s + i.area, 0);
+  const items       = await prisma.budgetItem.findMany({ where: { budgetId } });
+  const adjustments = await prisma.budgetAdjustment.findMany({ where: { budgetId } });
+
+  const totalArea    = items.reduce((s, i) => s + i.area,    0);
   const materialCost = items.reduce((s, i) => s + i.subtotal, 0);
-  const totalCost = materialCost + budget.laborCost + budget.extraCost - budget.discount;
+
+  let adjTotal = 0;
+  for (const adj of adjustments) {
+    const computed = adj.valueType === 'PERCENT' ? materialCost * adj.value / 100 : adj.value;
+    adjTotal += adj.type === 'COST' ? computed : -computed;
+  }
+
+  const totalCost = materialCost + budget.laborCost + budget.extraCost - budget.discount + adjTotal;
   await prisma.budget.update({ where: { id: budgetId }, data: { totalArea, totalCost } });
 }
 
@@ -230,5 +251,85 @@ budgetsRouter.delete('/:id/items/:itemId', async (req: AuthRequest, res: Respons
     await prisma.budgetItem.delete({ where: { id: req.params.itemId } });
     await recalcBudget(req.params.id);
     res.json({ success: true, message: 'Item removido' });
+  } catch (err) { next(err); }
+});
+
+// ─── Adjustments (custos/descontos adicionais) ────────────────────────────────
+
+budgetsRouter.post('/:id/adjustments', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const budget = await prisma.budget.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!budget) throw createError('Orçamento não encontrado', 404);
+
+    const { description, type, valueType, value } = req.body;
+    if (!description) throw createError('Descrição é obrigatória');
+
+    await prisma.budgetAdjustment.create({
+      data: {
+        budgetId: req.params.id,
+        description,
+        type:      type      || 'COST',
+        valueType: valueType || 'FIXED',
+        value:     parseFloat(value) || 0,
+      },
+    });
+    await recalcBudget(req.params.id);
+
+    const updated = await prisma.budget.findUnique({
+      where: { id: req.params.id },
+      include: {
+        items:       { include: { room: true, material: true } },
+        adjustments: { orderBy: { createdAt: 'asc' } },
+        seller:      true,
+        project:     { select: { id: true, name: true } },
+      },
+    });
+    res.status(201).json({ success: true, data: updated });
+  } catch (err) { next(err); }
+});
+
+budgetsRouter.put('/:id/adjustments/:adjId', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const budget = await prisma.budget.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!budget) throw createError('Orçamento não encontrado', 404);
+
+    const { description, type, valueType, value } = req.body;
+    await prisma.budgetAdjustment.update({
+      where: { id: req.params.adjId },
+      data: {
+        ...(description !== undefined && { description }),
+        ...(type        !== undefined && { type }),
+        ...(valueType   !== undefined && { valueType }),
+        ...(value       !== undefined && { value: parseFloat(value) }),
+      },
+    });
+    await recalcBudget(req.params.id);
+
+    const updated = await prisma.budget.findUnique({
+      where: { id: req.params.id },
+      include: {
+        items:       { include: { room: true, material: true } },
+        adjustments: { orderBy: { createdAt: 'asc' } },
+        seller:      true,
+        project:     { select: { id: true, name: true } },
+      },
+    });
+    res.json({ success: true, data: updated });
+  } catch (err) { next(err); }
+});
+
+budgetsRouter.delete('/:id/adjustments/:adjId', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const budget = await prisma.budget.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!budget) throw createError('Orçamento não encontrado', 404);
+    await prisma.budgetAdjustment.delete({ where: { id: req.params.adjId } });
+    await recalcBudget(req.params.id);
+    res.json({ success: true, message: 'Ajuste removido' });
   } catch (err) { next(err); }
 });

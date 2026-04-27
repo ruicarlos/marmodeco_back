@@ -40,6 +40,7 @@ model Company {
   users      User[]
   projects   Project[]
   kpiRecords KPIRecord[]
+  sellers    Seller[]
 }
 
 model Project {
@@ -122,6 +123,8 @@ model Budget {
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   userId      String
   user        User     @relation(fields: [userId], references: [id])
+  sellerId    String?
+  seller      Seller?  @relation(fields: [sellerId], references: [id])
   name        String
   status      String   @default("DRAFT") // DRAFT | PENDING | APPROVED | REJECTED
   totalArea   Float    @default(0)
@@ -135,7 +138,34 @@ model Budget {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  items BudgetItem[]
+  items       BudgetItem[]
+  adjustments BudgetAdjustment[]
+}
+
+model BudgetAdjustment {
+  id          String   @id @default(uuid())
+  budgetId    String
+  budget      Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  description String
+  type        String   // COST | DISCOUNT
+  valueType   String   // FIXED | PERCENT
+  value       Float
+  createdAt   DateTime @default(now())
+}
+
+model Seller {
+  id         String   @id @default(uuid())
+  name       String
+  email      String?
+  phone      String?
+  commission Float    @default(0) // %
+  active     Boolean  @default(true)
+  companyId  String?
+  company    Company? @relation(fields: [companyId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  budgets    Budget[]
 }
 
 model BudgetItem {
