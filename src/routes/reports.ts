@@ -849,15 +849,15 @@ type SVGRoom = { name: string; area: number; perimeter: number };
 function buildRoomsSVG(rooms: SVGRoom[]): string {
   if (rooms.length === 0) return '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>';
 
-  const PAD    = 20;
-  const GAP    = 14;
-  const SCALE  = 48;   // px per metre
-  const MIN_W  = 100;  // minimum room width  px
-  const MIN_H  = 72;   // minimum room height px
-  const LABEL  = 18;   // strip below rect for index badge
+  const PAD    = 24;
+  const GAP    = 16;
+  const SCALE  = 65;   // px per metre
+  const MIN_W  = 160;  // minimum room width  px
+  const MIN_H  = 120;  // minimum room height px
+  const LABEL  = 20;   // strip below rect for index badge
 
-  // Cap columns at 6 so rooms don't get tiny
-  const COLS    = Math.min(6, Math.max(1, Math.ceil(Math.sqrt(rooms.length))));
+  // Max 4 columns so each room stays large enough to read
+  const COLS    = Math.min(4, rooms.length);
   const numRows = Math.ceil(rooms.length / COLS);
 
   // Derive rectangle dims from area + perimeter, enforce minimums
@@ -898,7 +898,8 @@ function buildRoomsSVG(rooms: SVGRoom[]): string {
   const totalH = rowY[numRows-1] + rowHeights[numRows-1] + LABEL + PAD;
 
   const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}">`,
+    // No explicit width/height — CSS will scale via width:100%
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${totalH}">`,
     `<defs>`,
     `  <pattern id="hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">`,
     `    <line x1="0" y1="0" x2="0" y2="10" stroke="#c9d6e8" stroke-width="0.9"/>`,
@@ -917,38 +918,37 @@ function buildRoomsSVG(rooms: SVGRoom[]): string {
     const midY = y + h / 2;
 
     // Drop shadow
-    parts.push(`<rect x="${x+2}" y="${y+2}" width="${w}" height="${h}" rx="3" fill="#1a2e5a" opacity="0.07"/>`);
+    parts.push(`<rect x="${x+3}" y="${y+3}" width="${w}" height="${h}" rx="4" fill="#1a2e5a" opacity="0.08"/>`);
     // Hatch fill
-    parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="url(#hatch)"/>`);
+    parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="url(#hatch)"/>`);
     // White inner wash for readability
-    parts.push(`<rect x="${x+2}" y="${y+2}" width="${w-4}" height="${h-4}" rx="2" fill="white" opacity="0.55"/>`);
+    parts.push(`<rect x="${x+2}" y="${y+2}" width="${w-4}" height="${h-4}" rx="3" fill="white" opacity="0.5"/>`);
     // Border
-    parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="none" stroke="#1a2e5a" stroke-width="1.5"/>`);
+    parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="none" stroke="#1a2e5a" stroke-width="1.5"/>`);
 
-    // Gold corner ticks
-    const T = 7;
+    // Gold corner ticks (architect style)
+    const T = 10;
     for (const [px, py, dx, dy] of [
       [x, y, 1, 1], [x+w, y, -1, 1], [x, y+h, 1, -1], [x+w, y+h, -1, -1],
     ] as [number,number,number,number][]) {
-      parts.push(`<polyline points="${px},${py+dy*T} ${px},${py} ${px+dx*T},${py}" fill="none" stroke="#b8935a" stroke-width="2" stroke-linecap="square"/>`);
+      parts.push(`<polyline points="${px},${py+dy*T} ${px},${py} ${px+dx*T},${py}" fill="none" stroke="#b8935a" stroke-width="2.5" stroke-linecap="square"/>`);
     }
 
-    // Room name — truncate to fit
-    const maxChars = Math.max(5, Math.floor(w / 7.5));
+    // Room name (truncate if needed)
+    const maxChars = Math.max(6, Math.floor(w / 9));
     const label = room.name.length > maxChars ? room.name.slice(0, maxChars - 1) + '…' : room.name;
-    const fs = Math.min(13, Math.max(9, w / 9));
-    parts.push(`<text x="${midX}" y="${midY - 7}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="${fs}" font-weight="700" fill="#1a2e5a">${escapeXML(label)}</text>`);
+    parts.push(`<text x="${midX}" y="${midY - 10}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" font-weight="700" fill="#1a2e5a">${escapeXML(label)}</text>`);
 
     // Area
-    parts.push(`<text x="${midX}" y="${midY + 10}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9.5" fill="#334155">${room.area.toFixed(2)} m²</text>`);
+    parts.push(`<text x="${midX}" y="${midY + 10}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#334155">${room.area.toFixed(2)} m²</text>`);
 
-    // Perimeter small
+    // Perimeter
     if (room.perimeter > 0) {
-      parts.push(`<text x="${midX}" y="${midY + 23}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="8" fill="#94a3b8">P ${room.perimeter.toFixed(1)} m</text>`);
+      parts.push(`<text x="${midX}" y="${midY + 28}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#94a3b8">P: ${room.perimeter.toFixed(1)} m</text>`);
     }
 
     // Index badge below rect
-    parts.push(`<text x="${midX}" y="${y+h+13}" text-anchor="middle" font-family="'Courier New',monospace" font-size="7.5" fill="#b8935a">${String(i+1).padStart(2,'0')}</text>`);
+    parts.push(`<text x="${midX}" y="${y+h+15}" text-anchor="middle" font-family="monospace" font-size="10" font-weight="600" fill="#b8935a">${String(i+1).padStart(2,'0')}</text>`);
   });
 
   parts.push('</svg>');
