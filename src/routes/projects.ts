@@ -51,12 +51,14 @@ projectsRouter.get('/', async (req: AuthRequest, res: Response, next: NextFuncti
 
 projectsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { name, description, clientName, clientEmail, clientPhone } = req.body;
+    const { name, description, clientName, clientEmail, clientPhone, clientAddress, deliveryAddress } = req.body;
     if (!name) throw createError('Nome do projeto é obrigatório');
 
     const project = await prisma.project.create({
       data: {
         name, description, clientName, clientEmail, clientPhone,
+        clientAddress: clientAddress || null,
+        deliveryAddress: deliveryAddress || null,
         userId: req.user!.id,
         companyId: req.user!.companyId,
       },

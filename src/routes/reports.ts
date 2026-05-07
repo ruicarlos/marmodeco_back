@@ -519,11 +519,18 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
       where,
       include: {
         project: true,
-        user: { select: { name: true, email: true } },
+        user: { select: { name: true, email: true, companyId: true } },
         items: { include: { room: true, material: true } },
       },
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
+
+    // Load company data
+    const company = budget.user.companyId
+      ? await prisma.company.findUnique({ where: { id: budget.user.companyId } })
+      : null;
+
+    const companyName = company?.name || 'MarmoDecor';
 
     const doc = new PDFDocument({ margin: MARGIN, size: 'A4', bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
@@ -534,26 +541,32 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
     doc.rect(0, 0, PAGE_W, 110).fill(NAVY);
 
     // ── Brand header ──────────────────────────────────────────────────────────
-    doc.fontSize(26).fillColor('white').font('Helvetica-Bold')
-      .text('MARMODECOR', MARGIN, 28, { align: 'left' });
-    doc.fontSize(9).fillColor('#94a3b8').font('Helvetica')
-      .text('Orçamentação de Mármores e Granitos', MARGIN, 58);
+    doc.fontSize(22).fillColor('white').font('Helvetica-Bold')
+      .text(companyName.toUpperCase(), MARGIN, 22, { align: 'left' });
+    // Company contact info in header
+    const headerDetails: string[] = [];
+    if (company?.cnpj)    headerDetails.push(`CNPJ: ${company.cnpj}`);
+    if (company?.phone)   headerDetails.push(company.phone);
+    if (company?.email)   headerDetails.push(company.email);
+    if (company?.address) headerDetails.push(company.address);
+    doc.fontSize(8).fillColor('#94a3b8').font('Helvetica')
+      .text(headerDetails.join('  ·  ') || 'Orçamentação de Mármores e Granitos', MARGIN, 50, { width: CONTENT_W * 0.7 });
 
     // Quote number / status badge
     const statusLabel = STATUS_PT[budget.status] ?? budget.status;
     doc.fontSize(9).fillColor(GOLD).font('Helvetica-Bold')
       .text(`Orçamento #${budget.id.substring(0, 8).toUpperCase()}`, MARGIN, 80);
 
-    // ── Info strip ─────────────────────────────────────────────────────────────
+    // ── Info strip (project + dates) ──────────────────────────────────────────
     const infoY = 120;
     doc.rect(MARGIN, infoY, CONTENT_W, 60).fill(LIGHT).stroke('#e2e8f0');
 
     const col = CONTENT_W / 4;
     const infoItems = [
       { label: 'PROJETO', value: budget.project.name },
-      { label: 'CLIENTE', value: budget.project.clientName || '—' },
       { label: 'EMITIDO EM', value: new Date(budget.createdAt).toLocaleDateString('pt-BR') },
       { label: 'VALIDADE', value: budget.validUntil ? new Date(budget.validUntil).toLocaleDateString('pt-BR') : '—' },
+      { label: 'EMITIDO POR', value: budget.user.name },
     ];
     infoItems.forEach((item, i) => {
       const x = MARGIN + i * col + 8;
@@ -569,8 +582,34 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
     doc.fontSize(8).fillColor('white').font('Helvetica-Bold')
       .text(statusLabel, PAGE_W - MARGIN - 70, infoY + 41, { width: 70, align: 'center' });
 
+    // ── Client + Delivery strip ───────────────────────────────────────────────
+    const clientY = infoY + 68;
+    const halfW = (CONTENT_W - 8) / 2;
+
+    // Client data box
+    doc.rect(MARGIN, clientY, halfW, 52).fill(LIGHT).stroke('#e2e8f0');
+    doc.fontSize(7).fillColor(GRAY).font('Helvetica').text('DADOS DO CLIENTE', MARGIN + 8, clientY + 8);
+    doc.fontSize(9).fillColor(NAVY).font('Helvetica-Bold')
+      .text(budget.project.clientName || '—', MARGIN + 8, clientY + 20, { width: halfW - 16 });
+    const clientLines: string[] = [];
+    if (budget.project.clientPhone) clientLines.push(budget.project.clientPhone);
+    if (budget.project.clientEmail) clientLines.push(budget.project.clientEmail);
+    if ((budget.project as { clientAddress?: string }).clientAddress) clientLines.push((budget.project as { clientAddress?: string }).clientAddress!);
+    doc.fontSize(7.5).fillColor(GRAY).font('Helvetica')
+      .text(clientLines.join('  ·  ') || '—', MARGIN + 8, clientY + 33, { width: halfW - 16 });
+
+    // Delivery address box
+    const delivX = MARGIN + halfW + 8;
+    doc.rect(delivX, clientY, halfW, 52).fill(LIGHT).stroke('#e2e8f0');
+    doc.fontSize(7).fillColor(GRAY).font('Helvetica').text('ENDEREÇO DE ENTREGA', delivX + 8, clientY + 8);
+    const deliveryAddr = (budget.project as { deliveryAddress?: string }).deliveryAddress
+      || (budget.project as { clientAddress?: string }).clientAddress
+      || '—';
+    doc.fontSize(9).fillColor(NAVY).font('Helvetica-Bold')
+      .text(deliveryAddr, delivX + 8, clientY + 20, { width: halfW - 16 });
+
     // ── Section title ─────────────────────────────────────────────────────────
-    let y = infoY + 76;
+    let y = clientY + 60;
     doc.fontSize(11).fillColor(NAVY).font('Helvetica-Bold').text('DETALHAMENTO POR AMBIENTE', MARGIN, y);
     doc.moveTo(MARGIN, y + 16).lineTo(MARGIN + CONTENT_W, y + 16).lineWidth(1.5).strokeColor(GOLD).stroke();
     y += 24;
@@ -611,7 +650,7 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
       if (y > 730) {
         doc.addPage();
         doc.rect(0, 0, PAGE_W, 36).fill(NAVY);
-        doc.fontSize(9).fillColor('white').font('Helvetica').text('MARMODECOR — continuação', MARGIN, 14);
+        doc.fontSize(9).fillColor('white').font('Helvetica').text(`${companyName} — continuação`, MARGIN, 14);
         y = 50;
         y = drawTableHeader(y);
       }
@@ -632,7 +671,7 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
         if (y > 740) {
           doc.addPage();
           doc.rect(0, 0, PAGE_W, 36).fill(NAVY);
-          doc.fontSize(9).fillColor('white').font('Helvetica').text('MARMODECOR — continuação', MARGIN, 14);
+          doc.fontSize(9).fillColor('white').font('Helvetica').text(`${companyName} — continuação`, MARGIN, 14);
           y = 50;
           y = drawTableHeader(y);
         }

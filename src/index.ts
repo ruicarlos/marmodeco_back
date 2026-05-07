@@ -14,6 +14,7 @@ import { kpisRouter } from './routes/kpis';
 import { sellersRouter } from './routes/sellers';
 import { salesRouter } from './routes/sales';
 import { financialRouter } from './routes/financial';
+import { acabamentosRouter } from './routes/acabamentos';
 import { errorHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 
@@ -51,6 +52,7 @@ app.use('/api/kpis', kpisRouter);
 app.use('/api/sellers', sellersRouter);
 app.use('/api/sales', salesRouter);
 app.use('/api/financial', financialRouter);
+app.use('/api/acabamentos', acabamentosRouter);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'MarmoDecor API', version: '1.0.0' });

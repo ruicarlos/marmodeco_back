@@ -23,6 +23,7 @@ model User {
   budgets     Budget[]
   auditLogs   AuditLog[]
   kpiRecords  KPIRecord[]
+  acabamentos Acabamento[]
 }
 
 model Company {
@@ -37,20 +38,23 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users      User[]
-  projects   Project[]
-  kpiRecords KPIRecord[]
-  sellers    Seller[]
+  users       User[]
+  projects    Project[]
+  kpiRecords  KPIRecord[]
+  sellers     Seller[]
+  acabamentos Acabamento[]
 }
 
 model Project {
   id          String   @id @default(uuid())
   name        String
   description String?
-  clientName  String?
-  clientEmail String?
-  clientPhone String?
-  status      String   @default("DRAFT") // DRAFT | IN_PROGRESS | COMPLETED | CANCELLED
+  clientName      String?
+  clientEmail     String?
+  clientPhone     String?
+  clientAddress   String?
+  deliveryAddress String?
+  status          String   @default("DRAFT") // DRAFT | IN_PROGRESS | COMPLETED | CANCELLED
   projectType String?  // RESIDENCIAL | COMERCIAL | INDUSTRIAL | OUTRO
   deadline    DateTime?
   userId      String
@@ -268,6 +272,19 @@ model KPIRecord {
   notes              String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+}
+
+model Acabamento {
+  id          String   @id @default(uuid())
+  descricao   String
+  percentual  Float    @default(0) // % sobre o preço/m² do material
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  companyId   String?
+  company     Company? @relation(fields: [companyId], references: [id])
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model AuditLog {
