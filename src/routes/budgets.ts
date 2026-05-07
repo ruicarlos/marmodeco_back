@@ -34,7 +34,7 @@ budgetsRouter.get('/:id', async (req: AuthRequest, res: Response, next: NextFunc
         project: { select: { id: true, name: true, clientName: true, clientEmail: true } },
         user:    { select: { id: true, name: true, email: true } },
         seller:  { select: { id: true, name: true, email: true, phone: true, commission: true } },
-        items:       { include: { room: true, material: true } },
+        items:       { include: { room: true, material: true, acabamento: true } },
         adjustments: { orderBy: { createdAt: 'asc' } },
         sale:        { select: { id: true, status: true, paymentMethod: true, totalAmount: true, createdAt: true } },
       },
@@ -100,9 +100,10 @@ budgetsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFuncti
         totalCost: finalCost,
         ...(sellerId && { sellerId }),
         items: items && Array.isArray(items) ? {
-          create: items.map((item: { roomId: string; materialId: string; area: number; quantity: number; unitPrice: number; notes?: string }) => ({
-            roomId:     item.roomId,
-            materialId: item.materialId,
+          create: items.map((item: { roomId: string; materialId: string; acabamentoId?: string; area: number; quantity: number; unitPrice: number; notes?: string }) => ({
+            roomId:      item.roomId,
+            materialId:  item.materialId,
+            acabamentoId: item.acabamentoId || null,
             area:       parseFloat(String(item.area))      || 0,
             quantity:   parseFloat(String(item.quantity))  || 1,
             unitPrice:  parseFloat(String(item.unitPrice)) || 0,
@@ -113,7 +114,7 @@ budgetsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFuncti
         adjustments: adjData.length > 0 ? { create: adjData } : undefined,
       },
       include: {
-        items:       { include: { room: true, material: true } },
+        items:       { include: { room: true, material: true, acabamento: true } },
         adjustments: true,
         seller:      true,
         project:     { select: { id: true, name: true } },
@@ -194,20 +195,20 @@ budgetsRouter.post('/:id/items', async (req: AuthRequest, res: Response, next: N
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
 
-    const { roomId, materialId, area, unitPrice, notes } = req.body;
+    const { roomId, materialId, acabamentoId, area, unitPrice, notes } = req.body;
     if (!roomId || !materialId) throw createError('Ambiente e material são obrigatórios');
 
     const a = parseFloat(area) || 0;
     const p = parseFloat(unitPrice) || 0;
 
     await prisma.budgetItem.create({
-      data: { budgetId: req.params.id, roomId, materialId, area: a, quantity: 1, unitPrice: p, subtotal: a * p, notes: notes || null },
+      data: { budgetId: req.params.id, roomId, materialId, acabamentoId: acabamentoId || null, area: a, quantity: 1, unitPrice: p, subtotal: a * p, notes: notes || null },
     });
     await recalcBudget(req.params.id);
 
     const updated = await prisma.budget.findUnique({
       where: { id: req.params.id },
-      include: { items: { include: { room: true, material: true } }, project: { select: { id: true, name: true } } },
+      include: { items: { include: { room: true, material: true, acabamento: true } }, project: { select: { id: true, name: true } } },
     });
     res.status(201).json({ success: true, data: updated });
   } catch (err) { next(err); }
@@ -224,19 +225,20 @@ budgetsRouter.put('/:id/items/:itemId', async (req: AuthRequest, res: Response, 
     const item = await prisma.budgetItem.findFirst({ where: { id: req.params.itemId, budgetId: req.params.id } });
     if (!item) throw createError('Item não encontrado', 404);
 
-    const { materialId, area, unitPrice, notes } = req.body;
+    const { materialId, acabamentoId, area, unitPrice, notes } = req.body;
     const newArea  = area      !== undefined ? parseFloat(area)      : item.area;
     const newPrice = unitPrice !== undefined ? parseFloat(unitPrice) : item.unitPrice;
     const update: Record<string, unknown> = { area: newArea, unitPrice: newPrice, subtotal: newArea * newPrice };
-    if (materialId !== undefined) update.materialId = materialId;
-    if (notes      !== undefined) update.notes = notes;
+    if (materialId   !== undefined) update.materialId = materialId;
+    if (acabamentoId !== undefined) update.acabamentoId = acabamentoId || null;
+    if (notes        !== undefined) update.notes = notes;
 
     await prisma.budgetItem.update({ where: { id: req.params.itemId }, data: update });
     await recalcBudget(req.params.id);
 
     const updated = await prisma.budget.findUnique({
       where: { id: req.params.id },
-      include: { items: { include: { room: true, material: true } }, project: { select: { id: true, name: true } } },
+      include: { items: { include: { room: true, material: true, acabamento: true } }, project: { select: { id: true, name: true } } },
     });
     res.json({ success: true, data: updated });
   } catch (err) { next(err); }
@@ -281,7 +283,7 @@ budgetsRouter.post('/:id/adjustments', async (req: AuthRequest, res: Response, n
     const updated = await prisma.budget.findUnique({
       where: { id: req.params.id },
       include: {
-        items:       { include: { room: true, material: true } },
+        items:       { include: { room: true, material: true, acabamento: true } },
         adjustments: { orderBy: { createdAt: 'asc' } },
         seller:      true,
         project:     { select: { id: true, name: true } },
@@ -313,7 +315,7 @@ budgetsRouter.put('/:id/adjustments/:adjId', async (req: AuthRequest, res: Respo
     const updated = await prisma.budget.findUnique({
       where: { id: req.params.id },
       include: {
-        items:       { include: { room: true, material: true } },
+        items:       { include: { room: true, material: true, acabamento: true } },
         adjustments: { orderBy: { createdAt: 'asc' } },
         seller:      true,
         project:     { select: { id: true, name: true } },

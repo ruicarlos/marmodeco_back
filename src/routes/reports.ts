@@ -520,7 +520,7 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
       include: {
         project: true,
         user: { select: { name: true, email: true, companyId: true } },
-        items: { include: { room: true, material: true } },
+        items: { include: { room: true, material: true, acabamento: true } },
       },
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
@@ -686,7 +686,9 @@ reportsRouter.get('/budgets/:id/pdf', async (req: AuthRequest, res: Response, ne
         x += cols.mat;
         doc.text(TYPE_PT[item.material.type] ?? item.material.type, x, y + 5, { width: cols.tipo - 4 });
         x += cols.tipo;
-        doc.text(FINISH_PT[item.material.finish ?? ''] ?? (item.material.finish ?? '—'), x, y + 5, { width: cols.acab - 4 });
+        const acabLabel = (item as { acabamento?: { descricao: string } | null }).acabamento?.descricao
+          ?? FINISH_PT[item.material.finish ?? ''] ?? (item.material.finish ?? '—');
+        doc.text(acabLabel, x, y + 5, { width: cols.acab - 4 });
         x += cols.acab;
         doc.text(item.area.toFixed(2), x, y + 5, { width: cols.area - 4, align: 'right' });
         x += cols.area;
@@ -770,7 +772,7 @@ reportsRouter.get('/budgets/:id/excel', async (req: AuthRequest, res: Response, 
       where,
       include: {
         project: true,
-        items: { include: { room: true, material: true } },
+        items: { include: { room: true, material: true, acabamento: true } },
       },
     });
     if (!budget) throw createError('Orçamento não encontrado', 404);
@@ -808,11 +810,13 @@ reportsRouter.get('/budgets/:id/excel', async (req: AuthRequest, res: Response, 
     ];
 
     for (const item of budget.items) {
+      const acabStr = (item as { acabamento?: { descricao: string } | null }).acabamento?.descricao
+        ?? item.material.finish ?? '-';
       const row = sheet.addRow([
         item.room.name,
         item.material.name,
         item.material.type,
-        item.material.finish || '-',
+        acabStr,
         item.area,
         item.unitPrice,
         item.subtotal,

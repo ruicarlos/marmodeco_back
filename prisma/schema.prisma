@@ -225,20 +225,22 @@ model Seller {
 }
 
 model BudgetItem {
-  id         String   @id @default(uuid())
-  budgetId   String
-  budget     Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
-  roomId     String
-  room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  materialId String
-  material   Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
-  area       Float    @default(0)
-  quantity   Float    @default(0)
-  unitPrice  Float    @default(0)
-  subtotal   Float    @default(0)
-  notes      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String      @id @default(uuid())
+  budgetId      String
+  budget        Budget      @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  roomId        String
+  room          Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  materialId    String
+  material      Material    @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  acabamentoId  String?
+  acabamento    Acabamento? @relation(fields: [acabamentoId], references: [id])
+  area          Float       @default(0)
+  quantity      Float       @default(0)
+  unitPrice     Float       @default(0)  // final price (material + acabamento %)
+  subtotal      Float       @default(0)
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 }
 
 model SubscriptionPlan {
@@ -309,6 +311,8 @@ model Acabamento {
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  budgetItems BudgetItem[]
 }
 
 model AuditLog {
