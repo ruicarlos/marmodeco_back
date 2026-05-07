@@ -24,6 +24,7 @@ model User {
   auditLogs   AuditLog[]
   kpiRecords  KPIRecord[]
   acabamentos Acabamento[]
+  clients     Client[]
 }
 
 model Company {
@@ -43,12 +44,15 @@ model Company {
   kpiRecords  KPIRecord[]
   sellers     Seller[]
   acabamentos Acabamento[]
+  clients     Client[]
 }
 
 model Project {
   id          String   @id @default(uuid())
   name        String
   description String?
+  clientId        String?
+  client          Client?  @relation(fields: [clientId], references: [id])
   clientName      String?
   clientEmail     String?
   clientPhone     String?
@@ -272,6 +276,24 @@ model KPIRecord {
   notes              String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+}
+
+model Client {
+  id          String   @id @default(uuid())
+  name        String
+  phone       String?
+  email       String?
+  address     String?
+  notes       String?
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  companyId   String?
+  company     Company? @relation(fields: [companyId], references: [id])
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  projects    Project[]
 }
 
 model Acabamento {

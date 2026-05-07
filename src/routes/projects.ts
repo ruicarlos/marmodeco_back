@@ -51,13 +51,33 @@ projectsRouter.get('/', async (req: AuthRequest, res: Response, next: NextFuncti
 
 projectsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { name, description, clientName, clientEmail, clientPhone, clientAddress, deliveryAddress } = req.body;
+    const { name, description, clientId, clientName, clientEmail, clientPhone, clientAddress, deliveryAddress } = req.body;
     if (!name) throw createError('Nome do projeto é obrigatório');
+
+    // If a clientId is provided, pull client data automatically
+    let resolvedClientName    = clientName    || null;
+    let resolvedClientEmail   = clientEmail   || null;
+    let resolvedClientPhone   = clientPhone   || null;
+    let resolvedClientAddress = clientAddress || null;
+
+    if (clientId) {
+      const c = await prisma.client.findUnique({ where: { id: clientId } });
+      if (c) {
+        resolvedClientName    = c.name;
+        resolvedClientEmail   = c.email;
+        resolvedClientPhone   = c.phone;
+        resolvedClientAddress = c.address;
+      }
+    }
 
     const project = await prisma.project.create({
       data: {
-        name, description, clientName, clientEmail, clientPhone,
-        clientAddress: clientAddress || null,
+        name, description,
+        clientId: clientId || null,
+        clientName:    resolvedClientName,
+        clientEmail:   resolvedClientEmail,
+        clientPhone:   resolvedClientPhone,
+        clientAddress: resolvedClientAddress,
         deliveryAddress: deliveryAddress || null,
         userId: req.user!.id,
         companyId: req.user!.companyId,
