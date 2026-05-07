@@ -838,6 +838,142 @@ reportsRouter.get('/budgets/:id/excel', async (req: AuthRequest, res: Response, 
   } catch (err) { next(err); }
 });
 
+// ─── SVG room layout generator ───────────────────────────────────────────────
+
+function escapeXML(s: string) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+type SVGRoom = { name: string; area: number; perimeter: number };
+
+function buildRoomsSVG(rooms: SVGRoom[]): string {
+  const PAD   = 28;
+  const GAP   = 16;
+  const SCALE = 55;          // pixels per metre
+  const LABEL = 42;          // px reserved below each rect for text
+
+  // Approx rectangle dims from area + perimeter
+  const dims = rooms.map(r => {
+    const area = Math.max(r.area, 0.25);
+    const half = r.perimeter / 2;
+    let w: number, h: number;
+    if (r.perimeter > 0) {
+      const disc = half * half - 4 * area;
+      w = disc >= 0 ? (half + Math.sqrt(disc)) / 2 : Math.sqrt(area);
+      h = area / w;
+    } else {
+      w = h = Math.sqrt(area);
+    }
+    return { w: Math.max(w, 0.6) * SCALE, h: Math.max(h, 0.6) * SCALE };
+  });
+
+  const COLS    = Math.max(1, Math.ceil(Math.sqrt(rooms.length)));
+  const numRows = Math.ceil(rooms.length / COLS);
+
+  const colWidths = Array.from({ length: COLS }, (_, c) =>
+    Math.max(...Array.from({ length: numRows }, (_, r) => {
+      const idx = r * COLS + c; return idx < rooms.length ? dims[idx].w : 0;
+    }))
+  );
+  const rowHeights = Array.from({ length: numRows }, (_, r) =>
+    Math.max(...Array.from({ length: COLS }, (_, c) => {
+      const idx = r * COLS + c; return idx < rooms.length ? dims[idx].h : 0;
+    }))
+  );
+
+  // cumulative offsets
+  const colX: number[] = [];
+  const rowY: number[] = [];
+  let cx = PAD;
+  for (let i = 0; i < COLS; i++)    { colX.push(cx); cx += colWidths[i]  + GAP; }
+  let cy = PAD;
+  for (let i = 0; i < numRows; i++) { rowY.push(cy); cy += rowHeights[i] + LABEL + GAP; }
+
+  const totalW = cx - GAP + PAD;
+  const totalH = cy - GAP + PAD;
+
+  const parts: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${totalH}"`,
+    `     width="${totalW}" height="${totalH}">`,
+    `<defs>`,
+    `  <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">`,
+    `    <line x1="0" y1="0" x2="0" y2="8" stroke="#d1dae8" stroke-width="0.6"/>`,
+    `  </pattern>`,
+    `  <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">`,
+    `    <feDropShadow dx="1" dy="1" stdDeviation="2" flood-color="#1a2e5a" flood-opacity="0.12"/>`,
+    `  </filter>`,
+    `</defs>`,
+    `<rect width="${totalW}" height="${totalH}" fill="#f1f5f9"/>`,
+  ];
+
+  rooms.forEach((room, i) => {
+    const col = i % COLS;
+    const row = Math.floor(i / COLS);
+    const x = colX[col];
+    const y = rowY[row];
+    const { w, h } = dims[i];
+    const cx2 = x + w / 2;
+
+    // shadow rect
+    parts.push(`<rect x="${x+2}" y="${y+2}" width="${w}" height="${h}" rx="3" fill="#1a2e5a" opacity="0.08"/>`);
+    // fill
+    parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="url(#hatch)" filter="url(#shadow)"/>`);
+    // border
+    parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="none" stroke="#1a2e5a" stroke-width="1.5"/>`);
+
+    // corner ticks (architect style)
+    const T = 6;
+    for (const [px, py, dx, dy] of [
+      [x, y, 1, 1], [x+w, y, -1, 1], [x, y+h, 1, -1], [x+w, y+h, -1, -1],
+    ] as [number,number,number,number][]) {
+      parts.push(`<line x1="${px}" y1="${py+dy*T}" x2="${px}" y2="${py}" stroke="#b8935a" stroke-width="1.5"/>`);
+      parts.push(`<line x1="${px}" y1="${py}" x2="${px+dx*T}" y2="${py}" stroke="#b8935a" stroke-width="1.5"/>`);
+    }
+
+    // dimension lines
+    const MID_X = x + w / 2, MID_Y = y + h / 2;
+    const wM = (dims[i].w / SCALE).toFixed(2), hM = (dims[i].h / SCALE).toFixed(2);
+    // horizontal dim
+    parts.push(`<line x1="${x+4}" y1="${y-6}" x2="${x+w-4}" y2="${y-6}" stroke="#94a3b8" stroke-width="0.6" marker-start="url(#arr)" marker-end="url(#arr)"/>`);
+    parts.push(`<text x="${MID_X}" y="${y-8}" text-anchor="middle" font-family="'Courier New',monospace" font-size="8" fill="#94a3b8">${wM}m</text>`);
+    // vertical dim
+    parts.push(`<line x1="${x-6}" y1="${y+4}" x2="${x-6}" y2="${y+h-4}" stroke="#94a3b8" stroke-width="0.6"/>`);
+    parts.push(`<text x="${x-8}" y="${MID_Y+3}" text-anchor="middle" font-family="'Courier New',monospace" font-size="8" fill="#94a3b8" transform="rotate(-90,${x-8},${MID_Y})">${hM}m</text>`);
+
+    // room name
+    parts.push(`<text x="${cx2}" y="${MID_Y-6}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="${Math.min(13, Math.max(8, w/8))}" font-weight="700" fill="#1a2e5a">${escapeXML(room.name)}</text>`);
+    // area
+    parts.push(`<text x="${cx2}" y="${MID_Y+11}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9.5" fill="#475569">${room.area.toFixed(2)} m²</text>`);
+    // perimeter tag below rect
+    if (room.perimeter > 0) {
+      parts.push(`<text x="${cx2}" y="${y+h+14}" text-anchor="middle" font-family="'Courier New',monospace" font-size="8" fill="#94a3b8">P: ${room.perimeter.toFixed(2)} m</text>`);
+    }
+  });
+
+  parts.push('</svg>');
+  return parts.join('\n');
+}
+
+// SVG plant preview for project rooms
+reportsRouter.get('/projects/:id/rooms-svg', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const where = req.user!.role === 'ADMIN'
+      ? { id: req.params.id }
+      : { id: req.params.id, userId: req.user!.id };
+
+    const project = await prisma.project.findFirst({
+      where,
+      include: { rooms: { orderBy: { createdAt: 'asc' } } },
+    });
+    if (!project) throw createError('Projeto não encontrado', 404);
+
+    const svg = buildRoomsSVG(project.rooms);
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(svg);
+  } catch (err) { next(err); }
+});
+
 // Export project rooms as DXF
 reportsRouter.get('/projects/:id/dxf', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
