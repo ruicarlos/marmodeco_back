@@ -284,6 +284,8 @@ model Client {
   phone       String?
   email       String?
   address     String?
+  bairro      String?
+  cidade      String?
   notes       String?
   userId      String
   user        User     @relation(fields: [userId], references: [id])

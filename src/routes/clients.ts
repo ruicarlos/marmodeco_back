@@ -30,12 +30,13 @@ clientsRouter.get('/', async (req: AuthRequest, res: Response, next: NextFunctio
 // Create
 clientsRouter.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { name, phone, email, address, notes } = req.body;
+    const { name, phone, email, address, bairro, cidade, notes } = req.body;
     if (!name) throw createError('Nome é obrigatório');
     const client = await prisma.client.create({
       data: {
         name, phone: phone || null, email: email || null,
-        address: address || null, notes: notes || null,
+        address: address || null, bairro: bairro || null,
+        cidade: cidade || null, notes: notes || null,
         userId: req.user!.id,
         companyId: req.user!.companyId ?? undefined,
       },
@@ -51,7 +52,7 @@ clientsRouter.put('/:id', async (req: AuthRequest, res: Response, next: NextFunc
       where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
     });
     if (!existing) throw createError('Cliente não encontrado', 404);
-    const { name, phone, email, address, notes, active } = req.body;
+    const { name, phone, email, address, bairro, cidade, notes, active } = req.body;
     const client = await prisma.client.update({
       where: { id: req.params.id },
       data: {
@@ -59,6 +60,8 @@ clientsRouter.put('/:id', async (req: AuthRequest, res: Response, next: NextFunc
         ...(phone   !== undefined && { phone:   phone   || null }),
         ...(email   !== undefined && { email:   email   || null }),
         ...(address !== undefined && { address: address || null }),
+        ...(bairro  !== undefined && { bairro:  bairro  || null }),
+        ...(cidade  !== undefined && { cidade:  cidade  || null }),
         ...(notes   !== undefined && { notes:   notes   || null }),
         ...(active  !== undefined && { active }),
       },
