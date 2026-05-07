@@ -141,7 +141,30 @@ reportsRouter.get('/dashboard', async (req: AuthRequest, res: Response, next: Ne
     const isAdmin = req.user!.role === 'ADMIN';
     const userFilter = isAdmin ? {} : { userId: req.user!.id };
 
-    const [totalProjects, totalBudgets, totalMaterials, recentProjects, recentBudgets] = await Promise.all([
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth   = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    // Last 6 months labels
+    const MONTH_LABELS = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    const last6 = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
+      return { year: d.getFullYear(), month: d.getMonth(), label: MONTH_LABELS[d.getMonth()] };
+    });
+    const rangeStart = new Date(last6[0].year, last6[0].month, 1);
+
+    const [
+      totalProjects, totalBudgets, totalMaterials,
+      recentProjects, recentBudgets,
+      budgetsThisMonthCount, pendingCount, approvedCount,
+      inProductionCount, openProjectsCount,
+      statusCounts,
+      pendingBudgetsList,
+      approvedBudgetsForAvg,
+      monthlyBudgetsRaw,
+      kpiRecords,
+      expiredCount,
+    ] = await Promise.all([
       prisma.project.count({ where: userFilter }),
       prisma.budget.count({ where: userFilter }),
       prisma.material.count({ where: { active: true } }),
@@ -157,6 +180,33 @@ reportsRouter.get('/dashboard', async (req: AuthRequest, res: Response, next: Ne
         orderBy: { createdAt: 'desc' },
         include: { project: { select: { name: true } } },
       }),
+      prisma.budget.count({ where: { ...userFilter, createdAt: { gte: startOfMonth, lte: endOfMonth } } }),
+      prisma.budget.count({ where: { ...userFilter, status: 'PENDING' } }),
+      prisma.budget.count({ where: { ...userFilter, status: 'APPROVED' } }),
+      prisma.project.count({ where: { ...userFilter, status: 'IN_PROGRESS' } }),
+      prisma.project.count({ where: { ...userFilter, status: { notIn: ['COMPLETED', 'CANCELLED'] } } }),
+      prisma.budget.groupBy({ by: ['status'], where: userFilter, _count: true }),
+      prisma.budget.findMany({
+        where: { ...userFilter, status: 'PENDING' },
+        orderBy: { createdAt: 'asc' },
+        take: 5,
+        include: { project: { select: { clientName: true, name: true } } },
+      }),
+      prisma.budget.findMany({
+        where: { ...userFilter, status: 'APPROVED', approvedAt: { not: null } },
+        select: { createdAt: true, approvedAt: true },
+      }),
+      prisma.budget.findMany({
+        where: { ...userFilter, createdAt: { gte: rangeStart } },
+        select: { createdAt: true },
+      }),
+      prisma.kPIRecord.findMany({
+        where: { ...(isAdmin ? {} : { userId: req.user!.id }), period: { gte: rangeStart } },
+        orderBy: { period: 'asc' },
+      }),
+      prisma.budget.count({
+        where: { ...userFilter, status: 'PENDING', validUntil: { lt: now } },
+      }),
     ]);
 
     const budgetStats = await prisma.budget.aggregate({
@@ -165,24 +215,62 @@ reportsRouter.get('/dashboard', async (req: AuthRequest, res: Response, next: Ne
       _avg: { totalCost: true },
     });
 
-    const statusCounts = await prisma.budget.groupBy({
-      by: ['status'],
-      where: userFilter,
-      _count: true,
+    // Avg approval days
+    const avgApprovalDays = approvedBudgetsForAvg.length > 0
+      ? approvedBudgetsForAvg.reduce((acc, b) => {
+          const days = (new Date(b.approvedAt!).getTime() - new Date(b.createdAt).getTime()) / 86400000;
+          return acc + days;
+        }, 0) / approvedBudgetsForAvg.length
+      : 0;
+
+    // Monthly budgets (last 6 months)
+    const monthlyBudgets = last6.map(m => ({
+      month: m.label,
+      count: monthlyBudgetsRaw.filter(b => {
+        const d = new Date(b.createdAt);
+        return d.getFullYear() === m.year && d.getMonth() === m.month;
+      }).length,
+    }));
+
+    // OEE history (last 6 months)
+    const oeeHistory = last6.map(m => {
+      const recs = kpiRecords.filter(r => {
+        const d = new Date(r.period);
+        return r.type === 'OEE' && d.getFullYear() === m.year && d.getMonth() === m.month;
+      });
+      return { month: m.label, value: recs.length > 0 ? recs.reduce((s, r) => s + r.resultado, 0) / recs.length : null };
     });
+
+    // Monthly production (last 6 months)
+    const monthlyProduction = last6.map(m => {
+      const recs = kpiRecords.filter(r => {
+        const d = new Date(r.period);
+        return r.type === 'PRODUTIVIDADE' && d.getFullYear() === m.year && d.getMonth() === m.month;
+      });
+      return { month: m.label, value: recs.length > 0 ? recs.reduce((s, r) => s + r.resultado, 0) / recs.length : null };
+    });
+
+    const latestOEE = [...kpiRecords].filter(r => r.type === 'OEE').at(-1)?.resultado ?? null;
 
     res.json({
       success: true,
       data: {
-        totalProjects,
-        totalBudgets,
-        totalMaterials,
+        // Legacy
+        totalProjects, totalBudgets, totalMaterials,
         totalRevenue: budgetStats._sum.totalCost || 0,
         totalArea: budgetStats._sum.totalArea || 0,
         avgBudget: budgetStats._avg.totalCost || 0,
-        recentProjects,
-        recentBudgets,
-        statusCounts,
+        recentProjects, recentBudgets, statusCounts,
+        // New KPIs
+        budgetsThisMonth: budgetsThisMonthCount,
+        pendingCount, approvedCount, inProductionCount, openProjectsCount,
+        avgApprovalDays: Math.round(avgApprovalDays * 10) / 10,
+        latestOEE,
+        expiredCount,
+        // Charts
+        monthlyBudgets, oeeHistory, monthlyProduction,
+        // Lists
+        pendingBudgetsList,
       },
     });
   } catch (err) { next(err); }
