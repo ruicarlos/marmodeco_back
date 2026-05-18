@@ -7,6 +7,7 @@ import { prisma } from '../utils/prisma';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { createError } from '../middleware/errorHandler';
 import { processDXFFile } from '../services/dxfProcessor';
+import { analyzeFloorPlan, VisionAnalysisResult } from '../services/visionAnalyzer';
 
 const uploadDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -204,6 +205,107 @@ projectsRouter.post('/:id/files', upload.single('file'), async (req: AuthRequest
     }
 
     res.status(201).json({ success: true, data: { ...file, roomsCreated }, message });
+  } catch (err) { next(err); }
+});
+
+// ─── AI Vision analysis — PDF/Image floor plan reading ────────────────────────
+// Receives a planta (PDF/JPG/PNG), sends to Claude Vision, returns structured
+// surfaces + confidence. Does NOT persist rooms — that happens in /confirm
+// after the user has reviewed and edited.
+projectsRouter.post('/:id/analyze', upload.single('file'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!req.file) throw createError('Nenhum arquivo enviado');
+
+    const project = await prisma.project.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!project) throw createError('Projeto não encontrado', 404);
+
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const visionFormats = ['.pdf', '.jpg', '.jpeg', '.png', '.webp'];
+    if (!visionFormats.includes(ext)) {
+      throw createError('Formato não suportado para análise por IA. Use PDF, JPG, PNG ou WEBP.', 400);
+    }
+
+    // Persist the uploaded file record (so the user can re-open the planta later)
+    const file = await prisma.projectFile.create({
+      data: {
+        projectId: req.params.id,
+        filename: req.file.filename,
+        originalName: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        path: req.file.path,
+      },
+    });
+
+    // Work type comes from body (multipart field)
+    const workType = (req.body?.workType as string | undefined) || null;
+
+    let analysis: VisionAnalysisResult;
+    try {
+      analysis = await analyzeFloorPlan(req.file.path, workType);
+    } catch (visionError) {
+      console.error('Vision analysis error:', visionError);
+      const msg = (visionError as Error).message || 'Erro desconhecido na análise por IA';
+      // Mark file as not processed; surface the error to the client
+      throw createError(`Falha na análise por IA: ${msg}`, 500);
+    }
+
+    await prisma.projectFile.update({
+      where: { id: file.id },
+      data: { processed: true, processedAt: new Date() },
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        file,
+        analysis,
+      },
+      message: `Análise concluída: ${analysis.surfaces.length} superfície(s) identificada(s) com ${analysis.confidence}% de confiança.`,
+    });
+  } catch (err) { next(err); }
+});
+
+// Persist reviewed surfaces as rooms (called after user reviews the vision output)
+projectsRouter.post('/:id/confirm-analysis', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = await prisma.project.findFirst({
+      where: { id: req.params.id, ...(req.user!.role !== 'ADMIN' && { userId: req.user!.id }) },
+    });
+    if (!project) throw createError('Projeto não encontrado', 404);
+
+    const { surfaces, fileId } = req.body as {
+      surfaces: Array<{ name: string; width: number; depth: number; area: number; notes?: string }>;
+      fileId?: string;
+    };
+
+    if (!Array.isArray(surfaces) || surfaces.length === 0) {
+      throw createError('Nenhuma superfície enviada para confirmação', 400);
+    }
+
+    const created = await prisma.$transaction(
+      surfaces.map(s =>
+        prisma.room.create({
+          data: {
+            projectId: req.params.id,
+            fileId: fileId || null,
+            name: s.name,
+            area: Number(s.area) || (Number(s.width) * Number(s.depth)) || 0,
+            perimeter: 2 * ((Number(s.width) || 0) + (Number(s.depth) || 0)),
+            notes: s.notes || null,
+            isManual: false,
+          },
+        }),
+      ),
+    );
+
+    res.status(201).json({
+      success: true,
+      data: created,
+      message: `${created.length} ambiente(s) salvo(s) com sucesso.`,
+    });
   } catch (err) { next(err); }
 });
 

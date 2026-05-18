@@ -1,4 +1,8 @@
-import 'dotenv/config';
+// Load .env with override: true so values in .env take precedence over any
+// pre-existing (possibly empty) shell env vars like ANTHROPIC_API_KEY=""
+import { config as loadEnv } from 'dotenv';
+loadEnv({ override: true });
+
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
